@@ -1,0 +1,105 @@
+@import "tailwindcss";
+
+/*
+ * GitDeck 浅色主题（对照 docs/assets 下的三张原型）。
+ * 这里的 token 会生成 Tailwind 工具类：bg-app、text-ink、border-line、bg-st-modified-bg、text-lane-0 …
+ * 业务代码只用这些 token，不要写死颜色。
+ */
+@theme {
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Segoe UI",
+    "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "SF Mono", ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+
+  /* 表面与文字 */
+  --color-app: #fbfbfb; /* 窗口底色 */
+  --color-surface: #ffffff; /* 输入框、弹层、Diff 底 */
+  --color-subtle: #f3f3f4; /* 胶囊、选中 Tab、次按钮 */
+  --color-hover: #ebebed; /* 悬停 */
+  --color-line: #eaeaea; /* 分隔线、弹层描边 */
+  --color-line-strong: #d6d6da; /* 输入框描边 */
+  --color-ink: #1d1d1f; /* 主文字 */
+  --color-ink-2: #3c3c43; /* 次级正文 */
+  --color-muted: #8e8e93; /* 辅助文字 */
+  --color-faint: #c2c2c7; /* 占位、禁用、行号 */
+
+  /* 品牌与焦点 */
+  --color-accent: #2f6feb; /* 品牌蓝：仓库图标、主按钮 */
+  --color-accent-hover: #2560d6;
+  --color-accent-soft: #e8f0fe; /* 选中行底色 */
+  --color-focus: #3b82f6; /* 键盘焦点描边（原型中 Tab 的蓝色描边） */
+
+  /* 文件状态徽标：M 橙红、U 蓝（原型），其余为补充 */
+  --color-st-modified: #b4441c;
+  --color-st-modified-bg: #fbe3d9;
+  --color-st-untracked: #1a6fe0;
+  --color-st-untracked-bg: #e1eefd;
+  --color-st-added: #1f7a3d;
+  --color-st-added-bg: #ddf3e4;
+  --color-st-deleted: #c62f2f;
+  --color-st-deleted-bg: #fde2e1;
+  --color-st-renamed: #7445c9;
+  --color-st-renamed-bg: #eee6fb;
+  --color-st-conflict: #c62f2f;
+  --color-st-conflict-bg: #fde2e1;
+
+  /* Diff */
+  --color-diff-add: #1f7a3d;
+  --color-diff-add-bg: #e9f7ed;
+  --color-diff-add-gutter: #d3f0dc;
+  --color-diff-del: #b42323;
+  --color-diff-del-bg: #fdeeee;
+  --color-diff-del-gutter: #f9d7d7;
+  --color-diff-hunk: #5b6b8c;
+  --color-diff-hunk-bg: #f2f5fb;
+
+  /* 图谱泳道调色板（原型：蓝、紫、黄），分支标签与泳道同色 */
+  --color-lane-0: #3d9bff;
+  --color-lane-1: #ae7ff2;
+  --color-lane-2: #e9b53c;
+  --color-lane-3: #34b37a;
+  --color-lane-4: #ec6a9c;
+  --color-lane-5: #22b5bf;
+  --color-lane-6: #f08a3c;
+  --color-lane-7: #6e78f0;
+
+  --radius-card: 12px; /* 原型中输入框、按钮的大圆角 */
+  --shadow-pop: 0 10px 28px rgb(0 0 0 / 0.1), 0 1px 3px rgb(0 0 0 / 0.08);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    overflow: hidden;
+    background: var(--color-app);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    /* 桌面应用观感：界面文字默认不可选，输入框与 Diff 等内容区单独开启 select-text */
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+  }
+
+  input,
+  textarea {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  ::selection {
+    background: #cfe0fd;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #d4d4d8 transparent;
+  }
+}

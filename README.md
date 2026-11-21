@@ -6,6 +6,18 @@
 
 - [产品设计文档](docs/product-design.md) — 产品定位、核心功能、技术方案与开发顺序
 - [界面设计说明](docs/ui-design.md) — 三张界面原型的转写与交互说明
+- [开发约定](AGENTS.md) — 目录结构、模块边界、前后端契约与测试要求
+
+## 开发
+
+需要 Node 22+、pnpm 10+、Rust 1.80+ 与 Git。
+
+```bash
+pnpm install
+pnpm tauri dev      # 启动桌面应用
+pnpm dev            # 仅浏览器预览（mock 数据）
+pnpm check          # 类型检查 + 前端测试 + Rust 测试 + clippy
+```
 
 ## 核心模块
 

@@ -1,0 +1,55 @@
+//! GitDeck 后端入口：注册插件与全部命令。
+//!
+//! 模块分工：
+//! - `git`      共享：git CLI 调用封装、FileDiff
+//! - `projects` 项目管理
+//! - `graph`    Git Graph
+//! - `changes`  Changes 与远程同步
+//!
+//! 新增命令时只在自己模块那一段的末尾追加，各段之间保留空行，便于并行开发时合并。
+
+pub mod changes;
+pub mod error;
+pub mod git;
+pub mod graph;
+pub mod projects;
+
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            // ── 项目管理（projects）──
+            projects::commands::projects_list,
+            projects::commands::projects_create,
+            projects::commands::projects_rename,
+            projects::commands::projects_delete,
+            projects::commands::projects_add_folder,
+            projects::commands::projects_remove_folder,
+
+            // ── Git Graph（graph）──
+            graph::commands::graph_commits,
+            graph::commands::graph_refs,
+            graph::commands::graph_commit_detail,
+            graph::commands::graph_commit_file_diff,
+            graph::commands::branch_checkout,
+            graph::commands::branch_checkout_remote,
+            graph::commands::branch_create,
+            graph::commands::branch_delete,
+            graph::commands::branch_merge,
+
+            // ── Changes 与远程同步（changes）──
+            changes::commands::changes_status,
+            changes::commands::changes_file_diff,
+            changes::commands::changes_stage,
+            changes::commands::changes_unstage,
+            changes::commands::changes_discard,
+            changes::commands::changes_commit,
+            changes::commands::remote_fetch,
+            changes::commands::remote_pull,
+            changes::commands::remote_push,
+
+            // ── 结束 ──
+        ])
+        .run(tauri::generate_context!())
+        .expect("GitDeck 启动失败");
+}
