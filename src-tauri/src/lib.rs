@@ -56,6 +56,8 @@ pub fn run() {
             changes::commands::remote_fetch,
             changes::commands::remote_pull,
             changes::commands::remote_push,
+            changes::commands::changes_operation_continue,
+            changes::commands::changes_operation_abort,
 
             // ── 结束 ──
         ])

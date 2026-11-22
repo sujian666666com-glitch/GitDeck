@@ -10,6 +10,7 @@ let unstaged: StatusFile[] = [
   { path: "config.json", oldPath: null, kind: "untracked" },
 ];
 let ahead = 1;
+let behind = 0;
 let headSeq = 0;
 
 function status(): RepoStatus {
@@ -18,7 +19,9 @@ function status(): RepoStatus {
     headHash: `f00d${String(headSeq).padStart(36, "0")}`,
     upstream: "origin/ik/150-sso-login",
     ahead,
-    behind: 0,
+    behind,
+    hasRemote: true,
+    unreadablePaths: 0,
     staged: structuredClone(staged),
     unstaged: structuredClone(unstaged),
     conflicted: [],
@@ -88,6 +91,9 @@ export const changesMock: MockHandlers = {
 
   changes_commit: ({ message, amend }: { message: string; amend: boolean }) => {
     if (!message.trim() && !amend) mockError("invalid", "提交信息不能为空");
+    if (amend && headSeq === 0 && !status().headHash) {
+      mockError("invalid", "当前仓库尚无提交，无法修改提交");
+    }
     if (staged.length === 0 && !amend) {
       if (unstaged.length === 0) mockError("invalid", "没有可提交的更改");
       staged = unstaged.map((f) => ({ ...f, kind: f.kind === "untracked" ? "added" : f.kind }));
@@ -96,13 +102,19 @@ export const changesMock: MockHandlers = {
     staged = [];
     headSeq += 1;
     if (!amend) ahead += 1;
-    return { hash: status().headHash, summary: message.split("\n")[0] };
+    return { hash: status().headHash!, summary: message.split("\n")[0] || "amended commit" };
   },
 
   remote_fetch: () => null,
-  remote_pull: () => null,
+  remote_pull: () => {
+    behind = 0;
+    return null;
+  },
   remote_push: () => {
     ahead = 0;
     return null;
   },
+
+  changes_operation_continue: () => null,
+  changes_operation_abort: () => null,
 };
