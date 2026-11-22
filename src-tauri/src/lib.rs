@@ -16,6 +16,15 @@ pub mod projects;
 
 pub fn run() {
     tauri::Builder::default()
+        // 单实例：再次启动时聚焦已有窗口，避免两个进程同时读写同一份项目配置
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            use tauri::Manager;
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             // ── 项目管理（projects）──
