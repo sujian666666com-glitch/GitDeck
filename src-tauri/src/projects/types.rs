@@ -26,6 +26,8 @@ pub struct FolderNode {
     pub is_repo: bool,
     /// 识别到的仓库；`is_repo` 为 true 时只包含它自己
     pub repos: Vec<RepoNode>,
+    /// 扫描因访问预算用尽提前结束，`repos` 只是部分结果
+    pub truncated: bool,
 }
 
 /// 识别到的 Git 仓库

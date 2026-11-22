@@ -18,6 +18,8 @@ export interface FolderNode {
   isRepo: boolean;
   /** 识别到的仓库；isRepo 时只含自身 */
   repos: RepoNode[];
+  /** 扫描因访问预算用尽提前结束，repos 只是部分结果 */
+  truncated: boolean;
 }
 
 export interface RepoNode {
