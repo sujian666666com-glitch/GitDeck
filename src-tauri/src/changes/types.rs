@@ -49,6 +49,8 @@ pub struct RepoStatus {
     pub behind: u32,
     /// 是否配置了任何远程仓库
     pub has_remote: bool,
+    /// 无法按 UTF-8 解码的文件名计数
+    pub unreadable_paths: u32,
     /// 暂存区中的变更
     pub staged: Vec<StatusFile>,
     /// 工作区中未暂存的变更（含未跟踪文件）；部分暂存的文件会同时出现在 staged 与 unstaged

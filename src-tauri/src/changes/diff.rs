@@ -2,6 +2,11 @@ use std::path::Path;
 use crate::error::AppResult;
 use crate::git::{git, FileDiff};
 
+#[cfg(windows)]
+const NULL_DEVICE: &str = "NUL";
+#[cfg(not(windows))]
+const NULL_DEVICE: &str = "/dev/null";
+
 pub fn get_file_diff(repo_path: &str, path: &str, staged: bool) -> AppResult<FileDiff> {
     let repo = Path::new(repo_path);
     if staged {
@@ -32,7 +37,11 @@ pub fn get_file_diff(repo_path: &str, path: &str, staged: bool) -> AppResult<Fil
 
         let old_path = raw.split(|&b| b == b'\n').find_map(|line| {
             if line.starts_with(b"rename from ") {
-                String::from_utf8(line[12..].to_vec()).ok()
+                let mut s = &line[12..];
+                if s.ends_with(b"\r") {
+                    s = &s[..s.len() - 1];
+                }
+                String::from_utf8(s.to_vec()).ok()
             } else {
                 None
             }
@@ -48,7 +57,7 @@ pub fn get_file_diff(repo_path: &str, path: &str, staged: bool) -> AppResult<Fil
 
         if !is_tracked {
             let out = git(repo)
-                .args(["diff", "--no-index", "--no-color", "--no-ext-diff", "--", "/dev/null", path])
+                .args(["diff", "--no-index", "--no-color", "--no-ext-diff", "--", NULL_DEVICE, path])
                 .output()?;
             if out.code == Some(0) || out.code == Some(1) {
                 Ok(FileDiff::from_patch(path, None, &out.stdout))

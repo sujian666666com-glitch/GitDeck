@@ -3,6 +3,7 @@
 
 use super::commit::create_commit;
 use super::diff::get_file_diff;
+use super::operation::{operation_abort, operation_continue};
 use super::remote::{fetch_remote, pull_remote, push_remote};
 use super::stage::{discard_paths, stage_paths, unstage_paths};
 use super::status::get_repo_status;
@@ -57,4 +58,16 @@ pub async fn remote_pull(repo_path: String) -> AppResult<()> {
 #[tauri::command]
 pub async fn remote_push(repo_path: String) -> AppResult<()> {
     blocking(move || push_remote(&repo_path)).await
+}
+
+/// 继续进行中的操作（merge / rebase / cherry-pick / revert）
+#[tauri::command]
+pub async fn changes_operation_continue(repo_path: String) -> AppResult<()> {
+    blocking(move || operation_continue(&repo_path)).await
+}
+
+/// 中止进行中的操作（merge / rebase / cherry-pick / revert）
+#[tauri::command]
+pub async fn changes_operation_abort(repo_path: String) -> AppResult<()> {
+    blocking(move || operation_abort(&repo_path)).await
 }

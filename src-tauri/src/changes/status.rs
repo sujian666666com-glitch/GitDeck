@@ -23,6 +23,7 @@ pub struct ParsedStatus {
     pub upstream: Option<String>,
     pub ahead: u32,
     pub behind: u32,
+    pub unreadable_paths: u32,
     pub staged: Vec<StatusFile>,
     pub unstaged: Vec<StatusFile>,
     pub conflicted: Vec<StatusFile>,
@@ -34,6 +35,7 @@ pub fn parse_status_output(bytes: &[u8]) -> ParsedStatus {
     let mut upstream = None;
     let mut ahead = 0;
     let mut behind = 0;
+    let mut unreadable_paths = 0;
     let mut staged = Vec::new();
     let mut unstaged = Vec::new();
     let mut conflicted = Vec::new();
@@ -43,7 +45,14 @@ pub fn parse_status_output(bytes: &[u8]) -> ParsedStatus {
         if item.is_empty() {
             continue;
         }
-        let text = String::from_utf8_lossy(item);
+        let text = match std::str::from_utf8(item) {
+            Ok(s) => s,
+            Err(_) => {
+                unreadable_paths += 1;
+                continue;
+            }
+        };
+
         if let Some(rest) = text.strip_prefix("# ") {
             if let Some(oid) = rest.strip_prefix("branch.oid ") {
                 let trimmed = oid.trim();
@@ -97,7 +106,21 @@ pub fn parse_status_output(bytes: &[u8]) -> ParsedStatus {
             }
         } else if text.starts_with("2 ") {
             let parts: Vec<&str> = text.splitn(10, ' ').collect();
-            let orig_path = iter.next().map(|b| String::from_utf8_lossy(b).into_owned());
+            let orig_raw = iter.next();
+            let orig_path = match orig_raw {
+                Some(b) => match std::str::from_utf8(b) {
+                    Ok(s) => Some(s.to_string()),
+                    Err(_) => {
+                        unreadable_paths += 1;
+                        None
+                    }
+                },
+                None => None,
+            };
+            if orig_raw.is_some() && orig_path.is_none() {
+                // 原路径无法按 UTF-8 解码，跳过该条目
+                continue;
+            }
             if parts.len() == 10 {
                 let xy = parts[1];
                 let path = parts[9].to_string();
@@ -144,6 +167,7 @@ pub fn parse_status_output(bytes: &[u8]) -> ParsedStatus {
         upstream,
         ahead,
         behind,
+        unreadable_paths,
         staged,
         unstaged,
         conflicted,
@@ -227,6 +251,7 @@ pub fn get_repo_status(repo_path: &str) -> AppResult<RepoStatus> {
         ahead: parsed.ahead,
         behind: parsed.behind,
         has_remote,
+        unreadable_paths: parsed.unreadable_paths,
         staged: parsed.staged,
         unstaged: parsed.unstaged,
         conflicted: parsed.conflicted,

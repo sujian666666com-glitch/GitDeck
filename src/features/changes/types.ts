@@ -30,6 +30,8 @@ export interface RepoStatus {
   behind: number;
   /** 是否配置了任何远程仓库 */
   hasRemote: boolean;
+  /** 无法按 UTF-8 解码的文件名计数 */
+  unreadablePaths: number;
   staged: StatusFile[];
   /** 含未跟踪文件；部分暂存的文件同时出现在 staged 与 unstaged */
   unstaged: StatusFile[];

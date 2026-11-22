@@ -1,11 +1,12 @@
 use super::commit::create_commit;
 use super::diff::get_file_diff;
-use super::remote::{fetch_remote, pull_remote, push_remote};
+use super::operation::{operation_abort, operation_continue};
+use super::remote::{fetch_remote, map_network_error, pull_remote, push_remote};
 use super::stage::{discard_paths, stage_paths, unstage_paths};
 use super::status::{get_repo_status, parse_status_output};
-use super::types::ChangeKind;
-use crate::git::git;
-use crate::git::testutil::TempRepo;
+use super::types::{ChangeKind, RepoOperation};
+use crate::git::runner::GitOutput;
+use crate::git::{git, testutil::TempRepo};
 
 #[test]
 fn test_parse_status_output_comprehensive() {
@@ -29,6 +30,7 @@ u UU N... 100644 100644 100644 100644 1111 2222 3333 conflict.txt\0";
     assert_eq!(parsed.upstream.as_deref(), Some("origin/feature/测试"));
     assert_eq!(parsed.ahead, 3);
     assert_eq!(parsed.behind, 2);
+    assert_eq!(parsed.unreadable_paths, 0);
 
     // Staged list checks
     let staged_paths: Vec<(&str, ChangeKind)> = parsed.staged.iter().map(|f| (f.path.as_str(), f.kind)).collect();
@@ -53,6 +55,15 @@ u UU N... 100644 100644 100644 100644 1111 2222 3333 conflict.txt\0";
 }
 
 #[test]
+fn test_parse_status_unreadable_paths() {
+    let raw = b"? \xff\xfe\xfd\0? valid.txt\0";
+    let parsed = parse_status_output(raw);
+    assert_eq!(parsed.unreadable_paths, 1);
+    assert_eq!(parsed.unstaged.len(), 1);
+    assert_eq!(parsed.unstaged[0].path, "valid.txt");
+}
+
+#[test]
 fn test_parse_status_empty_repo() {
     let raw = b"# branch.oid (initial)\0# branch.head main\0";
     let parsed = parse_status_output(raw);
@@ -62,6 +73,7 @@ fn test_parse_status_empty_repo() {
     assert_eq!(parsed.upstream, None);
     assert_eq!(parsed.ahead, 0);
     assert_eq!(parsed.behind, 0);
+    assert_eq!(parsed.unreadable_paths, 0);
     assert!(parsed.staged.is_empty());
     assert!(parsed.unstaged.is_empty());
     assert!(parsed.conflicted.is_empty());
@@ -105,34 +117,50 @@ fn test_status_real_repo() {
 }
 
 #[test]
-fn test_stage_unstage_discard() {
+fn test_discard_safety_and_scenarios() {
     let repo = TempRepo::new();
     let repo_path = repo.path().to_str().unwrap();
 
-    repo.write("src/a.txt", "original a\n");
-    repo.write("src/b.txt", "original b\n");
-    repo.commit_all("commit 1");
+    repo.write("part.txt", "base content\n");
+    repo.write("del.txt", "to delete\n");
+    repo.commit_all("init");
 
-    // 修改并新增未跟踪文件
-    repo.write("src/a.txt", "modified a\n");
-    repo.write("src/未跟踪 文件.txt", "untracked\n");
+    // 1. 部分暂存文件：工作区再次修改，丢弃工作区修改后暂存区内容仍在
+    repo.write("part.txt", "staged change\n");
+    stage_paths(repo_path, &["part.txt".into()]).unwrap();
+    repo.write("part.txt", "staged change + worktree change\n");
 
-    // 暂存 a.txt
-    stage_paths(repo_path, &["src/a.txt".into()]).unwrap();
     let s = get_repo_status(repo_path).unwrap();
-    assert!(s.staged.iter().any(|f| f.path == "src/a.txt"));
+    assert!(s.staged.iter().any(|f| f.path == "part.txt"));
+    assert!(s.unstaged.iter().any(|f| f.path == "part.txt"));
 
-    // 取消暂存
-    unstage_paths(repo_path, &["src/a.txt".into()]).unwrap();
-    let s = get_repo_status(repo_path).unwrap();
-    assert!(s.staged.is_empty());
-    assert!(s.unstaged.iter().any(|f| f.path == "src/a.txt"));
+    discard_paths(repo_path, &["part.txt".into()]).unwrap();
+    let s_after = get_repo_status(repo_path).unwrap();
+    // 工作区未暂存修改清空，但暂存内容仍在
+    assert!(s_after.staged.iter().any(|f| f.path == "part.txt"));
+    assert!(!s_after.unstaged.iter().any(|f| f.path == "part.txt"));
+    let disk_content = std::fs::read_to_string(repo.path().join("part.txt")).unwrap();
+    assert_eq!(disk_content, "staged change\n");
 
-    // 丢弃修改（包含未跟踪文件）
-    discard_paths(repo_path, &["src/a.txt".into(), "src/未跟踪 文件.txt".into()]).unwrap();
-    let s = get_repo_status(repo_path).unwrap();
-    assert!(s.unstaged.is_empty());
-    assert!(!repo.path().join("src/未跟踪 文件.txt").exists());
+    // 2. 只丢弃同目录下一个未跟踪文件时，其他未跟踪文件依然保留
+    repo.write("sub/u1.txt", "untracked 1\n");
+    repo.write("sub/u2.txt", "untracked 2\n");
+    assert!(repo.path().join("sub/u1.txt").exists());
+    assert!(repo.path().join("sub/u2.txt").exists());
+
+    discard_paths(repo_path, &["sub/u1.txt".into()]).unwrap();
+    assert!(!repo.path().join("sub/u1.txt").exists());
+    assert!(repo.path().join("sub/u2.txt").exists());
+
+    // 3. 工作区删除的文件丢弃后被恢复
+    std::fs::remove_file(repo.path().join("del.txt")).unwrap();
+    let s_del = get_repo_status(repo_path).unwrap();
+    assert!(s_del.unstaged.iter().any(|f| f.path == "del.txt" && f.kind == ChangeKind::Deleted));
+
+    discard_paths(repo_path, &["del.txt".into()]).unwrap();
+    assert!(repo.path().join("del.txt").exists());
+    let s_restored = get_repo_status(repo_path).unwrap();
+    assert!(!s_restored.unstaged.iter().any(|f| f.path == "del.txt"));
 }
 
 #[test]
@@ -224,6 +252,98 @@ fn test_commit_normal_smart_amend() {
 }
 
 #[test]
+fn test_commit_multiline_chinese_and_hash_comments() {
+    let repo = TempRepo::new();
+    let repo_path = repo.path().to_str().unwrap();
+
+    repo.write("notes.txt", "hello\n");
+    let msg = "feat: 支持复杂提交说明\n\n# 注释风格的内容行\n第二行正文\n测试中文 UTF-8\n";
+    create_commit(repo_path, msg, false).unwrap();
+
+    let raw_body = git(repo.path()).args(["log", "-1", "--format=%B"]).run().unwrap();
+    assert!(raw_body.contains("# 注释风格的内容行"));
+    assert!(raw_body.contains("第二行正文"));
+    assert!(raw_body.contains("测试中文 UTF-8"));
+}
+
+#[test]
+fn test_batch_staging_over_100_paths() {
+    let repo = TempRepo::new();
+    let repo_path = repo.path().to_str().unwrap();
+
+    let mut paths = Vec::new();
+    for i in 0..120 {
+        let name = format!("batch_files/file_{:03}.txt", i);
+        repo.write(&name, "content\n");
+        paths.push(name);
+    }
+
+    // 分批暂存 120 个路径
+    stage_paths(repo_path, &paths).unwrap();
+    let s = get_repo_status(repo_path).unwrap();
+    assert_eq!(s.staged.len(), 120);
+
+    // 分批取消暂存
+    unstage_paths(repo_path, &paths).unwrap();
+    let s_un = get_repo_status(repo_path).unwrap();
+    assert!(s_un.staged.is_empty());
+    assert_eq!(s_un.unstaged.len(), 120);
+}
+
+#[test]
+fn test_merge_conflict_and_operations() {
+    let repo = TempRepo::new();
+    let repo_path = repo.path().to_str().unwrap();
+
+    repo.write("conflict.txt", "base line\n");
+    repo.commit_all("base commit");
+
+    // 切到分支 feat 修改
+    repo.git(&["switch", "-c", "feat"]);
+    repo.write("conflict.txt", "feat line\n");
+    repo.commit_all("feat commit");
+
+    // 切回 main 修改相同行
+    repo.git(&["switch", "main"]);
+    repo.write("conflict.txt", "main line\n");
+    repo.commit_all("main commit");
+
+    // merge 产生冲突（通过 Command 调用允许退出码非 0）
+    let _ = std::process::Command::new("git")
+        .current_dir(repo.path())
+        .args(["merge", "feat"])
+        .env("LC_ALL", "C")
+        .output();
+
+    let s = get_repo_status(repo_path).unwrap();
+    assert_eq!(s.operation, Some(RepoOperation::Merge));
+    assert!(s.conflicted.iter().any(|f| f.path == "conflict.txt"));
+
+    // merge 中 amend 应报错
+    let amend_err = create_commit(repo_path, "amend on merge", true).unwrap_err();
+    assert!(amend_err.to_string().contains("合并进行中无法修改提交"));
+
+    // 测试 operation_abort
+    operation_abort(repo_path).unwrap();
+    let s_abort = get_repo_status(repo_path).unwrap();
+    assert_eq!(s_abort.operation, None);
+
+    // 重新制造冲突并解决后测试 operation_continue
+    let _ = std::process::Command::new("git")
+        .current_dir(repo.path())
+        .args(["merge", "feat"])
+        .env("LC_ALL", "C")
+        .output();
+    repo.write("conflict.txt", "resolved line\n");
+    stage_paths(repo_path, &["conflict.txt".into()]).unwrap();
+
+    operation_continue(repo_path).unwrap();
+    let s_done = get_repo_status(repo_path).unwrap();
+    assert_eq!(s_done.operation, None);
+    assert!(s_done.conflicted.is_empty());
+}
+
+#[test]
 fn test_remote_fetch_pull_push() {
     let temp_dir = tempfile::tempdir().unwrap();
     let bare_dir = temp_dir.path().join("bare.git");
@@ -255,9 +375,44 @@ fn test_remote_fetch_pull_push() {
     assert_eq!(s.upstream.as_deref(), Some("origin/main"));
     assert_eq!(s.ahead, 0);
 
+    // 配置 branch.main.rebase = true 测试 pull 策略
+    git(repo.path())
+        .args(["config", "branch.main.rebase", "true"])
+        .run()
+        .unwrap();
+
     // Fetch
     fetch_remote(repo_path).unwrap();
 
     // Pull
     pull_remote(repo_path).unwrap();
+}
+
+#[test]
+fn test_network_error_mapping_categories() {
+    let make_out = |stderr: &str| GitOutput {
+        code: Some(1),
+        stdout: Vec::new(),
+        stderr: stderr.to_string(),
+    };
+
+    // non-fast-forward
+    let err1 = map_network_error(&make_out("To origin\n ! [rejected] main -> main (non-fast-forward)"), "fail");
+    assert!(err1.to_string().contains("推送被拒绝（远程分支包含本地尚未合并的提交）"));
+
+    // remote rejected
+    let err2 = map_network_error(&make_out("remote: error: hook declined to update refs/heads/main\n ! [remote rejected]"), "fail");
+    assert!(err2.to_string().contains("推送被远程拒绝"));
+
+    // src refspec
+    let err3 = map_network_error(&make_out("error: src refspec HEAD does not match any"), "fail");
+    assert!(err3.to_string().contains("当前分支还没有提交，无法推送"));
+
+    // host key verification failed
+    let err4 = map_network_error(&make_out("Host key verification failed."), "fail");
+    assert!(err4.to_string().contains("SSH 主机指纹未确认"));
+
+    // pull conflict
+    let err5 = map_network_error(&make_out("CONFLICT (content): Merge conflict in a.txt\nAutomatic merge failed; fix conflicts"), "fail");
+    assert!(err5.to_string().contains("拉取完成但产生冲突"));
 }

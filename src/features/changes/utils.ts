@@ -1,5 +1,5 @@
 import type { ConfirmOptions } from "@/components/ui/dialog";
-import type { ChangeKind, RepoOperation, StatusFile } from "./types";
+import type { ChangeKind, RepoOperation, RepoStatus, StatusFile } from "./types";
 
 export type CommitAction = "commit" | "amend" | "commitAndPush" | "commitAndSync";
 
@@ -45,10 +45,17 @@ export function getOperationBanner(op: RepoOperation | null): string | null {
   }
 }
 
-export function getDiscardConfirmOptions(paths: string[], unstaged: StatusFile[]): ConfirmOptions {
+export function getDiscardConfirmOptions(
+  paths: string[],
+  unstaged: StatusFile[],
+  staged: StatusFile[] = [],
+): ConfirmOptions {
   const count = paths.length;
   const untrackedSet = new Set(unstaged.filter((f) => f.kind === "untracked").map((f) => f.path));
+  const stagedSet = new Set(staged.map((f) => f.path));
+
   const hasUntracked = paths.some((p) => untrackedSet.has(p));
+  const hasPartiallyStaged = paths.some((p) => stagedSet.has(p));
 
   const title = count === 1 ? "丢弃更改？" : `丢弃 ${count} 个文件的更改？`;
   let description: string;
@@ -58,6 +65,10 @@ export function getDiscardConfirmOptions(paths: string[], unstaged: StatusFile[]
     description = hasUntracked
       ? `将丢弃 ${count} 个文件的修改，包含的未跟踪文件会被删除，无法撤销。`
       : `将丢弃 ${count} 个文件的修改，无法撤销。`;
+  }
+
+  if (hasPartiallyStaged) {
+    description += " 暂存区中的内容会保留。";
   }
 
   return {
@@ -78,5 +89,57 @@ export function getCommitActionLabel(action: CommitAction): string {
       return "提交和推送";
     case "commitAndSync":
       return "提交和同步";
+  }
+}
+
+/**
+ * 校验提交动作是否被禁用
+ */
+export function isCommitDisabled(
+  status: RepoStatus | null,
+  commitMsg: string,
+  isOperating: boolean,
+  action: CommitAction = "commit",
+): boolean {
+  if (isOperating) return true;
+  if (!status) return true;
+  // 变基过程中禁止常规 commit 和 amend，必须走继续
+  if (status.operation === "rebase") return true;
+
+  if (action === "amend") {
+    // 空仓库或合并过程中不允许 amend
+    if (!status.headHash) return true;
+    if (status.operation === "merge") return true;
+    return false;
+  }
+
+  // 常规提交 / 提交并推送 / 提交并同步
+  const totalCount = status.staged.length + status.unstaged.length + status.conflicted.length;
+  if (totalCount === 0) return true;
+  if (!commitMsg.trim()) return true;
+
+  return false;
+}
+
+/**
+ * 递增序号跟踪器，用于防止异步乱序响应覆盖最新状态
+ */
+export class SeqTracker {
+  private currentId = 0;
+
+  next(): number {
+    return ++this.currentId;
+  }
+
+  isLatest(id: number): boolean {
+    return id === this.currentId;
+  }
+
+  invalidate(): void {
+    this.currentId++;
+  }
+
+  current(): number {
+    return this.currentId;
   }
 }

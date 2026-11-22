@@ -16,14 +16,16 @@ export interface SyncActionsProps {
  */
 export function SyncActions({ repoPath }: SyncActionsProps) {
   const [status, setStatus] = useState<RepoStatus | null>(null);
+  const [hasError, setHasError] = useState(false);
   const [syncing, setSyncing] = useState<"fetch" | "pull" | "push" | null>(null);
 
   const refreshStatus = useCallback(async () => {
     try {
       const res = await changesApi.status(repoPath);
       setStatus(res);
+      setHasError(false);
     } catch {
-      // 后端或仓库暂时不可用时忽略，由主视图呈现错误
+      setHasError(true);
     }
   }, [repoPath]);
 
@@ -41,11 +43,10 @@ export function SyncActions({ repoPath }: SyncActionsProps) {
     try {
       await changesApi.fetch(repoPath);
       notify.success("已获取远程更新");
-      emitRepoChanged(repoPath, "all");
-      await refreshStatus();
     } catch (err) {
       notify.error(err, "获取失败");
     } finally {
+      emitRepoChanged(repoPath, "all");
       setSyncing(null);
     }
   };
@@ -56,11 +57,10 @@ export function SyncActions({ repoPath }: SyncActionsProps) {
     try {
       await changesApi.pull(repoPath);
       notify.success("已拉取最新更改");
-      emitRepoChanged(repoPath, "all");
-      await refreshStatus();
     } catch (err) {
       notify.error(err, "拉取失败");
     } finally {
+      emitRepoChanged(repoPath, "all");
       setSyncing(null);
     }
   };
@@ -71,24 +71,37 @@ export function SyncActions({ repoPath }: SyncActionsProps) {
     try {
       await changesApi.push(repoPath);
       notify.success(status?.upstream ? "推送成功" : "已发布分支并推送到远程");
-      emitRepoChanged(repoPath, "all");
-      await refreshStatus();
     } catch (err) {
       notify.error(err, "推送失败");
     } finally {
+      emitRepoChanged(repoPath, "all");
       setSyncing(null);
     }
   };
 
-  const hasRemote = status?.hasRemote ?? false;
-  const hasUpstream = Boolean(status?.upstream);
   const ahead = status?.ahead ?? 0;
   const behind = status?.behind ?? 0;
   const hasAheadBehind = ahead > 0 || behind > 0;
 
-  const fetchTip = !hasRemote ? "未配置远程仓库" : "获取（Fetch）";
-  const pullTip = !hasRemote ? "未配置远程仓库" : !hasUpstream ? "当前分支未设置上游分支" : "拉取（Pull）";
-  const pushTip = !hasRemote ? "未配置远程仓库" : !hasUpstream ? "发布分支到远程仓库" : "推送（Push）";
+  // 区分读取失败、加载中与无远程仓库 (G4, L6)
+  let statusReason = "";
+  if (hasError) {
+    statusReason = "无法读取仓库状态";
+  } else if (!status) {
+    statusReason = "正在读取状态...";
+  } else if (!status.hasRemote) {
+    statusReason = "未配置远程仓库";
+  }
+
+  const fetchTip = statusReason || "获取（Fetch）";
+  const pullTip =
+    statusReason || (!status?.upstream ? "当前分支未设置上游分支" : "拉取（Pull）");
+  const pushTip =
+    statusReason || (!status?.upstream ? "发布分支到远程仓库" : "推送（Push）");
+
+  const isFetchDisabled = Boolean(statusReason) || syncing !== null;
+  const isPullDisabled = Boolean(statusReason) || !status?.upstream || syncing !== null;
+  const isPushDisabled = Boolean(statusReason) || syncing !== null;
 
   return (
     <div className="flex items-center gap-1">
@@ -109,7 +122,7 @@ export function SyncActions({ repoPath }: SyncActionsProps) {
             label={fetchTip}
             noTip
             size="md"
-            disabled={!hasRemote || syncing !== null}
+            disabled={isFetchDisabled}
             onClick={handleFetch}
           >
             <RefreshCw className={syncing === "fetch" ? "animate-spin" : ""} />
@@ -123,7 +136,7 @@ export function SyncActions({ repoPath }: SyncActionsProps) {
             label={pullTip}
             noTip
             size="md"
-            disabled={!hasRemote || !hasUpstream || syncing !== null}
+            disabled={isPullDisabled}
             onClick={handlePull}
           >
             <ArrowDownToLine className={syncing === "pull" ? "animate-bounce" : ""} />
@@ -137,7 +150,7 @@ export function SyncActions({ repoPath }: SyncActionsProps) {
             label={pushTip}
             noTip
             size="md"
-            disabled={!hasRemote || syncing !== null}
+            disabled={isPushDisabled}
             onClick={handlePush}
           >
             <ArrowUpFromLine className={syncing === "push" ? "animate-bounce" : ""} />

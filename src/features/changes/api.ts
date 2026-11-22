@@ -16,4 +16,7 @@ export const changesApi = {
   fetch: (repoPath: string) => call<void>("remote_fetch", { repoPath }),
   pull: (repoPath: string) => call<void>("remote_pull", { repoPath }),
   push: (repoPath: string) => call<void>("remote_push", { repoPath }),
+
+  operationContinue: (repoPath: string) => call<void>("changes_operation_continue", { repoPath }),
+  operationAbort: (repoPath: string) => call<void>("changes_operation_abort", { repoPath }),
 };
