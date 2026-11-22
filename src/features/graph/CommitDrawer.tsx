@@ -111,7 +111,7 @@ function CommitContents({ detail, select, openFile }: { detail: CommitDetail; se
             <span>{formatDateTime(detail.commitTime)}</span>
           </div>
         )}
-        <h3 className="mt-3 text-[14px] leading-snug font-semibold whitespace-pre-wrap break-words select-text">{detail.subject}</h3>
+        <h3 className="mt-3 text-[14px] leading-snug font-semibold whitespace-pre-wrap break-words select-text">{detail.subject || "（无标题）"}</h3>
         {detail.body && <p className="mt-2 text-[13px] leading-relaxed whitespace-pre-wrap break-words text-ink-2 select-text">{detail.body}</p>}
         {detail.parents.length > 0 && (
           <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[12px] text-muted">

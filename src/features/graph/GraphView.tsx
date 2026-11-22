@@ -247,14 +247,14 @@ function LaneGraphic({ row, width }: { row: GraphRow; width: number }) {
   const x = (lane: number) => LANE_PADDING + lane * LANE_SPACING;
   return (
     <svg aria-hidden="true" className="shrink-0 overflow-hidden" width={width} height={ROW_HEIGHT}>
-      {row.segments.map(({ from, to, color: index }) => {
+      {row.segments.map(({ from, to, color }, index) => {
         const start = x(from.lane);
         const end = x(to.lane);
         const midpoint = (from.y + to.y) / 2;
         const path = start === end
           ? `M ${start} ${from.y} V ${to.y}`
           : `M ${start} ${from.y} C ${start} ${midpoint}, ${end} ${midpoint}, ${end} ${to.y}`;
-        return <path key={`${from.lane}-${from.y}-${to.lane}-${to.y}`} className={laneTextColors[index]} d={path} fill="none" stroke="currentColor" strokeWidth={2} />;
+        return <path key={`${from.lane}-${from.y}-${to.lane}-${to.y}-${index}`} className={laneTextColors[color]} d={path} fill="none" stroke="currentColor" strokeWidth={2} />;
       })}
       {row.lane < VISIBLE_LANES && <circle cx={x(row.lane)} cy={ROW_HEIGHT / 2} r={4.5} className={laneTextColors[row.color]} fill="currentColor" />}
     </svg>

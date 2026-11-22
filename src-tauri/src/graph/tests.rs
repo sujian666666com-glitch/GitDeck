@@ -72,6 +72,22 @@ fn parses_log_and_details_with_multiline_and_separator_characters() {
 }
 
 #[test]
+fn preserves_internal_crlf_in_commit_body() {
+    let repo = TempRepo::new();
+    repo.write("message", "标题\r\n\r\n正文第一行\r\n\r\n第二段\r\n");
+    repo.git(&[
+        "commit",
+        "--allow-empty",
+        "--cleanup=verbatim",
+        "-F",
+        "message",
+    ]);
+    let detail = history::commit_detail(repo.path(), "HEAD").unwrap();
+    assert_eq!(detail.summary.subject, "标题");
+    assert_eq!(detail.body, "正文第一行\r\n\r\n第二段");
+}
+
+#[test]
 fn paginates_and_filters_refs_without_including_stash() {
     let repo = TempRepo::new();
     let root = repo.commit_all("root");
@@ -192,6 +208,31 @@ fn maps_ordered_refs_with_tracking_and_detached_head() {
 }
 
 #[test]
+fn peels_nested_annotated_tags_to_the_commit() {
+    let repo = TempRepo::new();
+    let root = repo.commit_all("root");
+    repo.git(&["tag", "-a", "inner", "-m", "inner", &root]);
+    repo.git(&["tag", "-a", "outer", "-m", "outer", "refs/tags/inner"]);
+    let tags = refs::repo_refs(repo.path()).unwrap().tags;
+    assert_eq!(tags.len(), 2);
+    assert!(tags.iter().all(|tag| tag.hash == root));
+    let tagged = page(&repo, BranchFilter::Tags, 0, 10);
+    assert_eq!(tagged.commits.len(), 1);
+    assert_eq!(tagged.commits[0].hash, root);
+    assert!(tagged.commits[0]
+        .refs
+        .iter()
+        .any(|label| label.kind == RefKind::Tag && label.name == "outer"));
+}
+
+#[test]
+fn rejects_empty_file_diff_path_before_resolving_head() {
+    let repo = TempRepo::new();
+    let error = history::commit_file_diff(repo.path(), "HEAD", String::new(), None).unwrap_err();
+    assert!(matches!(error, AppError::Invalid(message) if message == "文件路径不能为空"));
+}
+
+#[test]
 fn reads_root_rename_and_binary_details_and_literal_file_diffs() {
     let repo = TempRepo::new();
     // The tab exercises numstat framing. The asterisk must be a literal pathspec.
@@ -255,6 +296,17 @@ fn reads_root_rename_and_binary_details_and_literal_file_diffs() {
     );
     let diff = history::commit_file_diff(repo.path(), &modified, new.into(), None).unwrap();
     assert!(diff.patch.contains("-second") && diff.patch.contains("+updated"));
+}
+
+#[test]
+fn creates_branch_at_an_older_hash_without_checkout() {
+    let repo = TempRepo::new();
+    let root = repo.commit_all("root");
+    let tip = repo.commit_all("tip");
+    branches::create(repo.path(), "topic", Some(&root), false).unwrap();
+    assert_eq!(repo.git(&["rev-parse", "refs/heads/topic"]).trim(), root);
+    assert_eq!(repo.git(&["branch", "--show-current"]).trim(), "main");
+    assert_eq!(repo.git(&["rev-parse", "HEAD"]).trim(), tip);
 }
 
 #[test]

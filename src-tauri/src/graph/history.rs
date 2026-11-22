@@ -84,7 +84,11 @@ pub(super) fn commit_detail(repo: &Path, revision: &str) -> AppResult<CommitDeta
         .strip_prefix("\r\n")
         .or_else(|| body.strip_prefix('\n'))
         .unwrap_or(body);
-    let body = body.strip_suffix('\n').unwrap_or(body).to_owned();
+    let body = body
+        .strip_suffix("\r\n")
+        .or_else(|| body.strip_suffix('\n'))
+        .unwrap_or(body)
+        .to_owned();
 
     let files = commit_files(repo, &hash, summary.parents.first().map(String::as_str))?;
     summary.refs = labels_by_hash(repo, head(repo)?)?
@@ -106,6 +110,9 @@ pub(super) fn commit_file_diff(
     path: String,
     old_path: Option<String>,
 ) -> AppResult<FileDiff> {
+    if path.is_empty() {
+        return Err(AppError::invalid("文件路径不能为空"));
+    }
     let hash = require_commit(repo, revision)?;
     let parents = git(repo)
         .args(["log", "-1", "--no-patch", "--format=%P", &hash, "--"])

@@ -3,7 +3,7 @@ import { useRepoChanged } from "@/lib/events";
 import { toAppError } from "@/lib/tauri";
 import { graphApi } from "./api";
 import { ROW_HEIGHT } from "./layout";
-import type { BranchFilter, CommitPage, RepoRefs } from "./types";
+import type { BranchFilter, CommitPage, CommitSummary, RepoRefs } from "./types";
 
 const PAGE_SIZE = 400;
 type LoadMode = "reset" | "refresh" | "more";
@@ -11,11 +11,23 @@ type LoadMode = "reset" | "refresh" | "more";
 interface Snapshot {
   page: CommitPage | null;
   refs: RepoRefs | null;
+  nextSkip: number;
+}
+
+function appendCommits(previous: CommitSummary[], incoming: CommitSummary[]) {
+  const seen = new Set(previous.map((commit) => commit.hash));
+  const commits = [...previous];
+  for (const commit of incoming) {
+    if (seen.has(commit.hash)) continue;
+    seen.add(commit.hash);
+    commits.push(commit);
+  }
+  return commits;
 }
 
 export function useCommitHistory(repoPath: string, active: boolean, scrollRef: RefObject<HTMLDivElement | null>) {
   const [filter, setFilter] = useState<BranchFilter>({ kind: "all" });
-  const [data, setData] = useState<Snapshot>({ page: null, refs: null });
+  const [data, setData] = useState<Snapshot>({ page: null, refs: null, nextSkip: 0 });
   const [loading, setLoading] = useState<LoadMode | null>(null);
   const [failure, setFailure] = useState<{ mode: LoadMode; message: string } | null>(null);
   const pending = useRef<LoadMode | null>(null);
@@ -36,11 +48,12 @@ export function useCommitHistory(repoPath: string, active: boolean, scrollRef: R
     }
 
     const previous = mode === "reset" ? [] : (data.page?.commits ?? []);
+    const skip = mode === "more" ? data.nextSkip : 0;
     try {
       const [page, refs] = await Promise.all([
         graphApi.commits(repoPath, {
           filter: selected,
-          skip: mode === "more" ? previous.length : 0,
+          skip,
           limit: mode === "refresh" ? Math.max(PAGE_SIZE, previous.length) : PAGE_SIZE,
         }),
         mode === "more" ? data.refs : graphApi.refs(repoPath),
@@ -55,8 +68,9 @@ export function useCommitHistory(repoPath: string, active: boolean, scrollRef: R
         restoreTop.current = nextIndex < 0 ? top : nextIndex * ROW_HEIGHT + (top % ROW_HEIGHT);
       }
       setData({
-        page: mode === "more" ? { ...page, commits: [...previous, ...page.commits] } : page,
+        page: mode === "more" ? { ...page, commits: appendCommits(previous, page.commits) } : page,
         refs,
+        nextSkip: skip + page.commits.length,
       });
     } catch (error) {
       if (generation.current !== request) return;
@@ -99,7 +113,8 @@ export function useCommitHistory(repoPath: string, active: boolean, scrollRef: R
   });
 
   return {
-    ...data,
+    page: data.page,
+    refs: data.refs,
     filter,
     loading,
     failure,
