@@ -19,6 +19,7 @@ function status(): RepoStatus {
     upstream: "origin/ik/150-sso-login",
     ahead,
     behind: 0,
+    hasRemote: true,
     staged: structuredClone(staged),
     unstaged: structuredClone(unstaged),
     conflicted: [],
@@ -96,7 +97,7 @@ export const changesMock: MockHandlers = {
     staged = [];
     headSeq += 1;
     if (!amend) ahead += 1;
-    return { hash: status().headHash, summary: message.split("\n")[0] };
+    return { hash: status().headHash, summary: message.split("\n")[0] || "amended commit" };
   },
 
   remote_fetch: () => null,

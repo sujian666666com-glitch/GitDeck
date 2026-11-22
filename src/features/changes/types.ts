@@ -28,6 +28,8 @@ export interface RepoStatus {
   upstream: string | null;
   ahead: number;
   behind: number;
+  /** 是否配置了任何远程仓库 */
+  hasRemote: boolean;
   staged: StatusFile[];
   /** 含未跟踪文件；部分暂存的文件同时出现在 staged 与 unstaged */
   unstaged: StatusFile[];
