@@ -12,6 +12,7 @@ import { cn } from "@/lib/cn";
 import { formatRelativeTime } from "@/lib/format";
 import { graphApi } from "./api";
 import { copyText, useBranchActions, type BranchActions } from "./branchActions";
+import { CreateBranchDialog, MergeBranchDialog } from "./BranchDialogs";
 import { CommitDrawer } from "./CommitDrawer";
 import { computeGraphLayout, ROW_HEIGHT, VISIBLE_LANES, type GraphRow } from "./layout";
 import { RefBadges } from "./RefBadges";
@@ -39,6 +40,7 @@ export function GraphView({ repoPath, active }: GraphViewProps) {
   const [selected, setSelected] = useState<string | null>(null);
   const history = useCommitHistory(repoPath, active, scrollRef);
   const actions = useBranchActions(repoPath);
+  const { dialog } = actions;
   const commits = history.page?.commits ?? emptyCommits;
   const layout = useMemo(() => computeGraphLayout(commits), [commits]);
   const laneWidth = Math.min(layout.laneCount, VISIBLE_LANES) * LANE_SPACING + LANE_PADDING;
@@ -133,6 +135,21 @@ export function GraphView({ repoPath, active }: GraphViewProps) {
           select={setSelected}
         />
       )}
+      {active && dialog?.kind === "create" && (
+        <CreateBranchDialog
+          from={dialog.from}
+          close={actions.closeDialog}
+          create={(name, checkout) => void actions.createBranch(dialog.startPoint, name, checkout)}
+        />
+      )}
+      {active && dialog?.kind === "merge" && (
+        <MergeBranchDialog
+          from={dialog.branch.name}
+          into={dialog.into}
+          close={actions.closeDialog}
+          merge={(noFf) => void actions.mergeBranch(dialog.branch, noFf)}
+        />
+      )}
     </div>
   );
 }
@@ -217,7 +234,7 @@ function CommitRow({ commit, row, laneWidth, top, selected, refs, actions, selec
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
-        <ContextMenuItem icon={<Plus />} disabled={actions.busy} onSelect={() => void actions.create(commit.hash, commit.shortHash)}>基于此提交创建分支…</ContextMenuItem>
+        <ContextMenuItem icon={<Plus />} disabled={actions.busy} onSelect={() => actions.openCreate(commit.hash, `提交 ${commit.shortHash}`)}>基于此提交创建分支…</ContextMenuItem>
         <ContextMenuSeparator />
         <ContextMenuItem icon={<Copy />} onSelect={() => void copyText(commit.hash, "提交哈希")}>复制提交哈希</ContextMenuItem>
         <ContextMenuItem icon={<Copy />} onSelect={copyMessage}>复制提交信息</ContextMenuItem>

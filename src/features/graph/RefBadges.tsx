@@ -137,8 +137,8 @@ function RefDetails({ label, refs, actions, close }: BadgeProps & { label: RefLa
         {label.kind === "remote" &&
           <RefAction disabled={actions.busy} icon={<Cloud />} onClick={() => select(() => void actions.checkoutRemote(label))}>检出为本地分支</RefAction>}
         {into && !label.isCurrent &&
-          <RefAction disabled={actions.busy} icon={<GitMerge />} onClick={() => select(() => void actions.merge(label, into))}>合并到当前分支</RefAction>}
-        <RefAction disabled={actions.busy} icon={<Plus />} onClick={() => select(() => void actions.create(label.fullName, label.name))}>基于此创建分支…</RefAction>
+          <RefAction disabled={actions.busy} icon={<GitMerge />} onClick={() => select(() => actions.openMerge(label, into))}>合并到当前分支</RefAction>}
+        <RefAction disabled={actions.busy} icon={<Plus />} onClick={() => select(() => actions.openCreate(label.fullName, `${labels[label.kind]} ${label.name}`))}>基于此创建分支…</RefAction>
         {label.kind === "local" && !label.isCurrent &&
           <RefAction disabled={actions.busy} danger icon={<Trash2 />} onClick={() => select(() => void actions.remove(label.name))}>删除分支</RefAction>}
       </div>

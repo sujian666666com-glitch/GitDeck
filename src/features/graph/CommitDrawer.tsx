@@ -38,6 +38,13 @@ export function CommitDrawer({ repoPath, hash, close, select }: DrawerProps) {
     <Dialog.Root open modal={false} onOpenChange={(open) => { if (!open) close(); }}>
       <Dialog.Content
         aria-describedby={undefined}
+        onEscapeKeyDown={(event) => {
+          if (event.defaultPrevented) return;
+          event.preventDefault();
+          if (event.repeat) return;
+          if (file) setFile(null);
+          else close();
+        }}
         onInteractOutside={(event) => event.preventDefault()}
         onCloseAutoFocus={(event) => event.preventDefault()}
         className={cn(
@@ -48,7 +55,8 @@ export function CommitDrawer({ repoPath, hash, close, select }: DrawerProps) {
         <div className="flex h-11 shrink-0 items-center gap-1 border-b border-line px-3">
           {file ? (
             <>
-              <IconButton autoFocus label="返回文件列表" onClick={() => setFile(null)}><ArrowLeft /></IconButton>
+              {/* 聚焦时弹出的 Tooltip 会先收到 Esc。 */}
+              <IconButton autoFocus noTip label="返回文件列表" onClick={() => setFile(null)}><ArrowLeft /></IconButton>
               <Dialog.Title className="min-w-0 flex-1 truncate font-medium" title={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}>
                 {file.oldPath && <span className="text-muted">{file.oldPath} → </span>}{file.path}
               </Dialog.Title>

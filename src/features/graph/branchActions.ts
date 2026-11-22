@@ -4,11 +4,23 @@ import { notify } from "@/components/ui/toast";
 import { emitRepoChanged } from "@/lib/events";
 import { toAppError } from "@/lib/tauri";
 import { graphApi } from "./api";
-import type { RefLabel } from "./types";
+import type { MergeOutcome, RefLabel } from "./types";
+
+type BranchDialogRequest =
+  | { kind: "create"; startPoint: string; from: string }
+  | { kind: "merge"; branch: RefLabel; into: string };
+
+const mergeMessages: Record<MergeOutcome, string> = {
+  merged: "已合并",
+  fastForward: "已快进合并",
+  upToDate: "已是最新",
+  conflicts: "合并产生冲突，请到 Changes 中解决",
+};
 
 export function useBranchActions(repoPath: string) {
   const pending = useRef(false);
   const [busy, setBusy] = useState(false);
+  const [dialog, setDialog] = useState<BranchDialogRequest | null>(null);
 
   async function run(title: string, action: () => Promise<{ message: string; conflicts?: boolean } | null>) {
     if (pending.current) return;
@@ -30,12 +42,18 @@ export function useBranchActions(repoPath: string) {
 
   return {
     busy,
-    create: (startPoint: string, from: string) => run("创建分支失败", async () => {
-      const name = await promptDialog({ title: "创建分支", description: `基于 ${from} 创建本地分支。`, label: "分支名称", placeholder: "feature/login", confirmText: "创建" });
-      if (name === null) return null;
-      await graphApi.createBranch(repoPath, name, startPoint, false);
-      return { message: `已创建分支 ${name}` };
-    }),
+    dialog,
+    closeDialog: () => setDialog(null),
+    openCreate: (startPoint: string, from: string) => {
+      if (!pending.current) setDialog({ kind: "create", startPoint, from });
+    },
+    createBranch: (startPoint: string, name: string, checkout: boolean) => {
+      setDialog(null);
+      return run("创建分支失败", async () => {
+        await graphApi.createBranch(repoPath, name, startPoint, checkout);
+        return { message: checkout ? `已创建并切换到 ${name}` : `已创建分支 ${name}` };
+      });
+    },
     checkout: (name: string) => run("切换分支失败", async () => {
       await graphApi.checkout(repoPath, name);
       return { message: `已切换到 ${name}` };
@@ -52,12 +70,16 @@ export function useBranchActions(repoPath: string) {
       await graphApi.checkoutRemote(repoPath, branch.fullName, name);
       return { message: `已检出并切换到 ${name}` };
     }),
-    merge: (branch: RefLabel, into: string) => run("合并分支失败", async () => {
-      const confirmed = await confirmDialog({ title: "合并到当前分支？", description: `将 ${branch.name} 合并到 ${into}。`, confirmText: "合并" });
-      if (!confirmed) return null;
-      const result = await graphApi.merge(repoPath, branch.fullName, true);
-      return { message: result.message, conflicts: result.outcome === "conflicts" };
-    }),
+    openMerge: (branch: RefLabel, into: string) => {
+      if (!pending.current) setDialog({ kind: "merge", branch, into });
+    },
+    mergeBranch: (branch: RefLabel, noFf: boolean) => {
+      setDialog(null);
+      return run("合并分支失败", async () => {
+        const { outcome } = await graphApi.merge(repoPath, branch.fullName, noFf);
+        return { message: mergeMessages[outcome], conflicts: outcome === "conflicts" };
+      });
+    },
     remove: (name: string) => run("删除分支失败", async () => {
       const confirmed = await confirmDialog({ title: "删除本地分支？", description: `删除 ${name}。`, confirmText: "删除", danger: true });
       if (!confirmed) return null;
