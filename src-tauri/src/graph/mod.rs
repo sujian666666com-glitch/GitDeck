@@ -3,3 +3,10 @@
 
 pub mod commands;
 pub mod types;
+
+mod branches;
+mod history;
+mod refs;
+
+#[cfg(test)]
+mod tests;
