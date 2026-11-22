@@ -6,6 +6,7 @@ import {
   FolderOpen,
   FolderPlus,
   GitBranch,
+  MoreHorizontal,
   Pencil,
   Plus,
   RefreshCw,
@@ -22,6 +23,11 @@ import {
   ContextMenuItem,
   ContextMenuSeparator,
   ContextMenuTrigger,
+  Menu,
+  MenuContent,
+  MenuItem,
+  MenuSeparator,
+  MenuTrigger,
 } from "@/components/ui/menu";
 import { cn } from "@/lib/cn";
 import { flattenProjects, type TreeRow } from "./tree";
@@ -31,6 +37,7 @@ import { useProjects, type ProjectsController } from "./useProjects";
 /**
  * 侧边栏「项目」区：项目 / 文件夹 / Git 仓库三级树。
  * 数据与操作见 `useProjects`，展开状态保存在 localStorage（默认全部展开）。
+ * 每行都有右键菜单与悬停 / 聚焦时出现的「更多操作」按钮，两者内容一致。
  */
 export function ProjectsPanel() {
   const { selection } = useAppState();
@@ -80,7 +87,8 @@ export function ProjectsPanel() {
               key={row.key}
               row={row}
               projects={projects}
-              selectedPath={selection?.repoPath ?? null}
+              selectedProjectId={selection?.projectId ?? null}
+              selectedRepoPath={selection?.repoPath ?? null}
             />
           ))}
         </div>
@@ -91,6 +99,11 @@ export function ProjectsPanel() {
 
 const INDENT = 16;
 const BASE_PADDING = 6;
+
+/** 行菜单项：右键菜单与「更多操作」下拉共用同一份内容 */
+type RowMenuEntry =
+  | { type: "separator" }
+  | { type: "item"; key: string; label: string; icon: ReactNode; danger?: boolean; onSelect: () => void };
 
 interface RowShellProps {
   depth: number;
@@ -106,11 +119,10 @@ interface RowShellProps {
   onClick?: () => void;
   /** 可展开行的展开状态，供读屏软件播报 */
   ariaExpanded?: boolean;
-  trailing?: ReactNode;
-  menu?: ReactNode;
+  menu?: RowMenuEntry[];
 }
 
-/** 一行：图标 + 名称 + 可选的hover操作按钮 / 右键菜单 */
+/** 一行：图标 + 名称 + 悬停操作按钮 + 右键菜单 */
 function RowShell({
   depth,
   icon,
@@ -122,7 +134,6 @@ function RowShell({
   labelClassName,
   onClick,
   ariaExpanded,
-  trailing,
   menu,
 }: RowShellProps) {
   const body = (
@@ -132,6 +143,8 @@ function RowShell({
       {hint && <span className="ml-auto shrink-0 pl-1 text-[11px] text-faint">{hint}</span>}
     </>
   );
+
+  const hasMenu = Boolean(menu && menu.length > 0);
 
   const content = (
     <div
@@ -147,6 +160,7 @@ function RowShell({
           onClick={onClick}
           title={title}
           aria-expanded={ariaExpanded}
+          aria-current={selected ? "true" : undefined}
           className={cn(
             "flex h-full min-w-0 flex-1 items-center gap-2 rounded-lg text-left outline-none focus-visible:ring-2 focus-visible:ring-focus/60",
             muted ? "text-muted" : "text-ink",
@@ -162,15 +176,50 @@ function RowShell({
           {body}
         </div>
       )}
-      {trailing}
+
+      {hasMenu && (
+        <Menu>
+          <MenuTrigger asChild>
+            <IconButton
+              label="更多操作"
+              size="sm"
+              noTip
+              className="opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100"
+            >
+              <MoreHorizontal />
+            </IconButton>
+          </MenuTrigger>
+          <MenuContent align="end">
+            {menu?.map((entry, index) =>
+              entry.type === "separator" ? (
+                <MenuSeparator key={`sep-${index}`} />
+              ) : (
+                <MenuItem key={entry.key} icon={entry.icon} danger={entry.danger} onSelect={entry.onSelect}>
+                  {entry.label}
+                </MenuItem>
+              ),
+            )}
+          </MenuContent>
+        </Menu>
+      )}
     </div>
   );
 
-  if (!menu) return content;
+  if (!hasMenu) return content;
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>{content}</ContextMenuTrigger>
-      <ContextMenuContent>{menu}</ContextMenuContent>
+      <ContextMenuContent>
+        {menu?.map((entry, index) =>
+          entry.type === "separator" ? (
+            <ContextMenuSeparator key={`sep-${index}`} />
+          ) : (
+            <ContextMenuItem key={entry.key} icon={entry.icon} danger={entry.danger} onSelect={entry.onSelect}>
+              {entry.label}
+            </ContextMenuItem>
+          ),
+        )}
+      </ContextMenuContent>
     </ContextMenu>
   );
 }
@@ -178,11 +227,13 @@ function RowShell({
 function TreeRowView({
   row,
   projects,
-  selectedPath,
+  selectedProjectId,
+  selectedRepoPath,
 }: {
   row: TreeRow;
   projects: ProjectsController;
-  selectedPath: string | null;
+  selectedProjectId: string | null;
+  selectedRepoPath: string | null;
 }) {
   switch (row.kind) {
     case "project":
@@ -195,7 +246,7 @@ function TreeRowView({
           project={row.project}
           repo={row.repo}
           projects={projects}
-          selected={selectedPath === row.repo.path}
+          selected={selectedProjectId === row.project.id && selectedRepoPath === row.repo.path}
         />
       );
     case "empty-folder":
@@ -214,12 +265,41 @@ function TreeRowView({
         <RowShell
           depth={row.depth}
           icon={<GitBranch className="size-[15px] text-faint" />}
-          label="未发现 Git 仓库"
+          // 扫描被预算截断时，「没发现仓库」不代表真的没有
+          label={row.folder.truncated ? "扫描不完整，未发现仓库" : "未发现 Git 仓库"}
           muted
           labelClassName="text-[12px] text-faint"
         />
       );
   }
+}
+
+function projectMenu(project: ProjectNode, projects: ProjectsController): RowMenuEntry[] {
+  return [
+    {
+      type: "item",
+      key: "add-folder",
+      label: "添加文件夹…",
+      icon: <FolderPlus />,
+      onSelect: () => void projects.addFolder(project),
+    },
+    {
+      type: "item",
+      key: "rename",
+      label: "重命名…",
+      icon: <Pencil />,
+      onSelect: () => void projects.renameProject(project),
+    },
+    { type: "separator" },
+    {
+      type: "item",
+      key: "delete",
+      label: "删除项目",
+      icon: <Trash2 />,
+      danger: true,
+      onSelect: () => void projects.deleteProject(project),
+    },
+  ];
 }
 
 function ProjectRow({ project, projects }: { project: ProjectNode; projects: ProjectsController }) {
@@ -231,30 +311,7 @@ function ProjectRow({ project, projects }: { project: ProjectNode; projects: Pro
       labelClassName="font-semibold"
       ariaExpanded={projects.expanded.includes(project.id)}
       onClick={() => projects.toggle(project.id)}
-      trailing={
-        <IconButton
-          label="添加文件夹"
-          size="sm"
-          className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-          onClick={() => void projects.addFolder(project)}
-        >
-          <FolderPlus />
-        </IconButton>
-      }
-      menu={
-        <>
-          <ContextMenuItem icon={<FolderPlus />} onSelect={() => void projects.addFolder(project)}>
-            添加文件夹…
-          </ContextMenuItem>
-          <ContextMenuItem icon={<Pencil />} onSelect={() => void projects.renameProject(project)}>
-            重命名…
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem danger icon={<Trash2 />} onSelect={() => void projects.deleteProject(project)}>
-            删除项目
-          </ContextMenuItem>
-        </>
-      }
+      menu={projectMenu(project, projects)}
     />
   );
 }
@@ -270,6 +327,25 @@ function FolderRow({
 }) {
   const open = projects.expanded.includes(folder.id);
   const Icon = open && folder.exists ? FolderOpen : Folder;
+  const hint = !folder.exists ? "目录不存在" : folder.truncated ? "仅显示部分结果" : undefined;
+
+  const menu: RowMenuEntry[] = [
+    {
+      type: "item",
+      key: "rescan",
+      label: "重新扫描",
+      icon: <RefreshCw />,
+      onSelect: () => void projects.rescan(),
+    },
+    { type: "separator" },
+    {
+      type: "item",
+      key: "remove",
+      label: "从项目中移除…",
+      icon: <FolderMinus />,
+      onSelect: () => void projects.removeFolder(project, folder),
+    },
+  ];
 
   return (
     <RowShell
@@ -277,21 +353,11 @@ function FolderRow({
       icon={<Icon className={cn("size-[15px]", folder.exists ? "text-ink-2" : "text-faint")} />}
       label={folder.name}
       title={folder.path}
-      hint={folder.exists ? undefined : "目录不存在"}
+      hint={hint}
       muted={!folder.exists}
       ariaExpanded={open}
       onClick={() => projects.toggle(folder.id)}
-      menu={
-        <>
-          <ContextMenuItem icon={<RefreshCw />} onSelect={() => void projects.rescan()}>
-            重新扫描
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem icon={<FolderMinus />} onSelect={() => void projects.removeFolder(project, folder)}>
-            从项目中移除…
-          </ContextMenuItem>
-        </>
-      }
+      menu={menu}
     />
   );
 }
@@ -309,6 +375,16 @@ function RepoRow({
 }) {
   const { selectRepo } = useAppState();
 
+  const menu: RowMenuEntry[] = [
+    {
+      type: "item",
+      key: "copy-path",
+      label: "复制路径",
+      icon: <Copy />,
+      onSelect: () => void projects.copyRepoPath(repo.path),
+    },
+  ];
+
   return (
     <RowShell
       depth={2}
@@ -319,11 +395,7 @@ function RepoRow({
       onClick={() =>
         selectRepo({ repoPath: repo.path, repoName: repo.name, projectId: project.id, projectName: project.name })
       }
-      menu={
-        <ContextMenuItem icon={<Copy />} onSelect={() => void projects.copyRepoPath(repo.path)}>
-          复制路径
-        </ContextMenuItem>
-      }
+      menu={menu}
     />
   );
 }

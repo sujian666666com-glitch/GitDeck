@@ -8,9 +8,10 @@ import { projectsApi } from "./api";
 import {
   collectNodeIds,
   expandNode,
-  findRepo,
   loadExpanded,
   pruneExpanded,
+  reconcileSelection,
+  sameSelection,
   saveExpanded,
   toggleExpanded,
 } from "./tree";
@@ -49,6 +50,12 @@ export interface ProjectsController {
 /**
  * 项目树的数据与操作：加载、展开状态持久化、增删改。
  * 渲染见 `ProjectsPanel`。
+ *
+ * 响应顺序：
+ * - 每次修改成功后先做一次本地合并（名称、新增 / 移除的节点），再发起一次带序号的刷新；
+ * - 只有序号最新的一次 `projects_list` 响应会被应用，晚到的旧快照（例如修改前发起的重新扫描）
+ *   直接丢弃，避免把已移除的文件夹 / 已重命名的项目“恢复”回去；
+ * - 重命名只合并返回的名称，不用它返回的完整快照覆盖整棵树。
  */
 export function useProjects(): ProjectsController {
   const { selection, selectRepo } = useAppState();
@@ -60,6 +67,9 @@ export function useProjects(): ProjectsController {
   const projectsRef = useRef(projects);
   const expandedRef = useRef(expanded);
   const selectionRef = useRef(selection);
+  /** 刷新请求序号：只有最新一次的响应可以落地 */
+  const refreshTicketRef = useRef(0);
+
   useEffect(() => {
     selectionRef.current = selection;
   }, [selection]);
@@ -71,37 +81,53 @@ export function useProjects(): ProjectsController {
     saveExpanded(next);
   }, []);
 
-  /** 写入新树：同步裁剪展开状态，并在当前仓库消失时清空选中 */
+  /** 写入新树：裁剪展开状态，并集中校准选中仓库 */
   const commit = useCallback(
     (list: ProjectNode[]) => {
       projectsRef.current = list;
       setProjects(list);
       applyExpanded(pruneExpanded(expandedRef.current, list));
+
       const current = selectionRef.current;
-      if (current && !findRepo(list, current.repoPath)) selectRepo(null);
+      const next = reconcileSelection(list, current);
+      selectionRef.current = next;
+      if (next === current) return;
+      if (!next) selectRepo(null);
+      else if (!current || !sameSelection(current, next)) selectRepo(next);
     },
     [applyExpanded, selectRepo],
   );
 
-  const reload = useCallback(async () => {
-    try {
-      const list = await projectsApi.list();
-      setError(null);
-      // 首次启动（localStorage 里还没有展开状态）默认全部展开
-      if (loadExpanded() === null) applyExpanded(collectNodeIds(list));
-      commit(list);
-    } catch (err) {
-      const message = toAppError(err).message;
-      setError(message);
-      notify.error(err, "读取项目失败");
-    } finally {
-      setLoading(false);
-    }
-  }, [applyExpanded, commit]);
+  /**
+   * 读取后端并应用最新一次结果。
+   * `initial` 只影响错误提示文案（首次加载 vs 后续刷新）。
+   */
+  const refresh = useCallback(
+    async (initial = false) => {
+      const ticket = refreshTicketRef.current + 1;
+      refreshTicketRef.current = ticket;
+
+      try {
+        const list = await projectsApi.list();
+        if (ticket !== refreshTicketRef.current) return; // 已有更新的请求，丢弃旧响应
+        setError(null);
+        // 首次启动（localStorage 里还没有展开状态）默认全部展开
+        if (loadExpanded() === null) applyExpanded(collectNodeIds(list));
+        commit(list);
+      } catch (err) {
+        if (ticket !== refreshTicketRef.current) return;
+        setError(toAppError(err).message);
+        notify.error(err, initial ? "读取项目失败" : "刷新项目失败");
+      } finally {
+        if (ticket === refreshTicketRef.current) setLoading(false);
+      }
+    },
+    [applyExpanded, commit],
+  );
 
   useEffect(() => {
-    void reload();
-  }, [reload]);
+    void refresh(true);
+  }, [refresh]);
 
   const toggle = useCallback(
     (id: string) => {
@@ -125,10 +151,11 @@ export function useProjects(): ProjectsController {
       // 新建的项目默认展开
       applyExpanded(expandNode(expandedRef.current, project.id));
       commit([...projectsRef.current, project]);
+      await refresh();
     } catch (err) {
       notify.error(err, "新建项目失败");
     }
-  }, [applyExpanded, commit]);
+  }, [applyExpanded, commit, refresh]);
 
   const renameProject = useCallback(
     async (project: ProjectNode) => {
@@ -143,14 +170,14 @@ export function useProjects(): ProjectsController {
 
       try {
         const updated = await projectsApi.rename(project.id, name);
-        commit(projectsRef.current.map((item) => (item.id === updated.id ? updated : item)));
-        const current = selectionRef.current;
-        if (current && current.projectId === updated.id) selectRepo({ ...current, projectName: updated.name });
+        // 只合并名称，避免用返回的完整快照覆盖刚刚发生的其他修改
+        commit(projectsRef.current.map((item) => (item.id === updated.id ? { ...item, name: updated.name } : item)));
+        await refresh();
       } catch (err) {
         notify.error(err, "重命名项目失败");
       }
     },
-    [commit, selectRepo],
+    [commit, refresh],
   );
 
   const deleteProject = useCallback(
@@ -166,11 +193,12 @@ export function useProjects(): ProjectsController {
       try {
         await projectsApi.remove(project.id);
         commit(projectsRef.current.filter((item) => item.id !== project.id));
+        await refresh();
       } catch (err) {
         notify.error(err, "删除项目失败");
       }
     },
-    [commit],
+    [commit, refresh],
   );
 
   const addFolder = useCallback(
@@ -195,11 +223,12 @@ export function useProjects(): ProjectsController {
             item.id === project.id ? { ...item, folders: [...item.folders, folder] } : item,
           ),
         );
+        await refresh();
       } catch (err) {
         notify.error(err, "添加文件夹失败");
       }
     },
-    [applyExpanded, commit],
+    [applyExpanded, commit, refresh],
   );
 
   const removeFolder = useCallback(
@@ -220,21 +249,17 @@ export function useProjects(): ProjectsController {
               : item,
           ),
         );
+        await refresh();
       } catch (err) {
         notify.error(err, "移除文件夹失败");
       }
     },
-    [commit],
+    [commit, refresh],
   );
 
   const rescan = useCallback(async () => {
-    try {
-      const list = await projectsApi.list();
-      commit(list);
-    } catch (err) {
-      notify.error(err, "重新扫描失败");
-    }
-  }, [commit]);
+    await refresh();
+  }, [refresh]);
 
   const copyRepoPath = useCallback(async (repoPath: string) => {
     try {
@@ -250,7 +275,7 @@ export function useProjects(): ProjectsController {
     loading,
     error,
     expanded,
-    reload,
+    reload: refresh,
     toggle,
     createProject,
     renameProject,

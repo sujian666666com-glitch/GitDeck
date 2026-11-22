@@ -1,13 +1,18 @@
 //! 项目管理的核心逻辑：读写配置、校验、增删改、扫描结果拼装。
 //!
 //! 所有函数都接收配置文件路径（不依赖 `AppHandle`），方便在测试里直接用临时目录。
-//! 读改写由一个进程级互斥锁串行化，避免两个命令同时保存导致丢失修改。
+//!
+//! 并发与阻塞：
+//! - 读改写由一个进程级互斥锁串行化，锁内只做「读配置 → 改内存 → 保存」，不做目录扫描；
+//! - 扫描（可能很慢：网络目录、海量目录）在锁外进行，因此扫描期间其他项目操作不会被阻塞；
+//! - 跨进程写入由应用的单实例机制保证（不在本模块处理）。
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use super::config::{self, StoredFolder, StoredProject};
+use super::paths;
 use super::scan;
 use super::types::{FolderNode, ProjectNode};
 use crate::error::{AppError, AppResult};
@@ -23,7 +28,7 @@ fn lock() -> MutexGuard<'static, ()> {
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// 串行执行一次「读 → 改 → 写」。锁在阻塞线程内获取，不跨 await。
+/// 串行执行一次「读 → 改 → 写」。闭包里不要做扫描等耗时操作。
 fn with_lock<T>(f: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
     let _guard = lock();
     f()
@@ -31,30 +36,28 @@ fn with_lock<T>(f: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
 
 /* ───────── 读取 ───────── */
 
-/// 读取配置并扫描每个文件夹中的仓库
+/// 读取配置并扫描每个文件夹中的仓库（扫描在锁外）
 pub fn list(config_path: &Path) -> AppResult<Vec<ProjectNode>> {
-    with_lock(|| {
-        let config = config::load(config_path)?;
-        Ok(config.projects.iter().map(build_project).collect())
-    })
+    let config = with_lock(|| config::load(config_path))?;
+    Ok(config.projects.iter().map(build_project).collect())
 }
 
 /* ───────── 项目 ───────── */
 
 pub fn create(config_path: &Path, name: &str) -> AppResult<ProjectNode> {
-    with_lock(|| {
+    let project = with_lock(|| {
         let name = validate_name(name)?;
         let mut config = config::load(config_path)?;
-        let project =
-            StoredProject { id: new_id(), name, folders: Vec::new() };
+        let project = StoredProject { id: new_id(), name, folders: Vec::new() };
         config.projects.push(project.clone());
         config::save(config_path, &config)?;
-        Ok(build_project(&project))
-    })
+        Ok(project)
+    })?;
+    Ok(build_project(&project))
 }
 
 pub fn rename(config_path: &Path, project_id: &str, name: &str) -> AppResult<ProjectNode> {
-    with_lock(|| {
+    let project = with_lock(|| {
         let name = validate_name(name)?;
         let mut config = config::load(config_path)?;
         let project = config
@@ -65,8 +68,9 @@ pub fn rename(config_path: &Path, project_id: &str, name: &str) -> AppResult<Pro
         project.name = name;
         let project = project.clone();
         config::save(config_path, &config)?;
-        Ok(build_project(&project))
-    })
+        Ok(project)
+    })?;
+    Ok(build_project(&project))
 }
 
 pub fn delete(config_path: &Path, project_id: &str) -> AppResult<()> {
@@ -83,9 +87,9 @@ pub fn delete(config_path: &Path, project_id: &str) -> AppResult<()> {
 
 /* ───────── 文件夹 ───────── */
 
-/// 给项目添加文件夹并立即扫描
+/// 给项目添加文件夹并立即扫描（保存与扫描分别在锁内 / 锁外）
 pub fn add_folder(config_path: &Path, project_id: &str, path: &str) -> AppResult<FolderNode> {
-    with_lock(|| {
+    let folder = with_lock(|| {
         let mut config = config::load(config_path)?;
         let project = config
             .projects
@@ -102,11 +106,12 @@ pub fn add_folder(config_path: &Path, project_id: &str, path: &str) -> AppResult
             return Err(AppError::invalid("该文件夹已在项目中"));
         }
 
-        let folder = StoredFolder { id: new_id(), path: path_to_string(&canonical) };
+        let folder = StoredFolder { id: new_id(), path: paths::path_string(&canonical) };
         project.folders.push(folder.clone());
         config::save(config_path, &config)?;
-        Ok(build_folder(&folder))
-    })
+        Ok(folder)
+    })?;
+    Ok(build_folder(&folder))
 }
 
 pub fn remove_folder(config_path: &Path, project_id: &str, folder_id: &str) -> AppResult<()> {
@@ -144,16 +149,18 @@ fn validate_name(raw: &str) -> AppResult<String> {
     Ok(name.to_string())
 }
 
-/// 校验并规范化用户选择（或手输）的目录
+/// 校验并规范化用户选择（或手输）的目录。
+///
+/// 只做「空值校验」与「路径解析」两件事：**不 trim 路径**，
+/// 目录名以空格结尾是合法路径，trim 会指向另一个（可能存在的）目录。
 fn canonical_dir(path: &str) -> AppResult<PathBuf> {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
+    if path.is_empty() {
         return Err(AppError::invalid("请选择一个文件夹"));
     }
-    let canonical = fs::canonicalize(trimmed)
-        .map_err(|_| AppError::invalid(format!("文件夹不存在或无法访问：{trimmed}")))?;
+    let canonical = fs::canonicalize(path)
+        .map_err(|_| AppError::invalid(format!("文件夹不存在或无法访问：{path}")))?;
     if !canonical.is_dir() {
-        return Err(AppError::invalid(format!("不是文件夹：{trimmed}")));
+        return Err(AppError::invalid(format!("不是文件夹：{path}")));
     }
     Ok(canonical)
 }
@@ -175,6 +182,7 @@ fn build_project(project: &StoredProject) -> ProjectNode {
     }
 }
 
+/// 扫描单个文件夹（锁外调用）
 fn build_folder(folder: &StoredFolder) -> FolderNode {
     let path = PathBuf::from(&folder.path);
     let name = folder_name(&path);
@@ -186,6 +194,7 @@ fn build_folder(folder: &StoredFolder) -> FolderNode {
             exists: true,
             is_repo: outcome.is_repo,
             repos: outcome.repos,
+            truncated: outcome.truncated,
         },
         None => FolderNode {
             id: folder.id.clone(),
@@ -194,6 +203,7 @@ fn build_folder(folder: &StoredFolder) -> FolderNode {
             exists: false,
             is_repo: false,
             repos: Vec::new(),
+            truncated: false,
         },
     }
 }
@@ -201,11 +211,7 @@ fn build_folder(folder: &StoredFolder) -> FolderNode {
 fn folder_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path_to_string(path))
-}
-
-fn path_to_string(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
+        .unwrap_or_else(|| paths::path_string(path))
 }
 
 #[cfg(test)]
@@ -320,6 +326,7 @@ mod tests {
         let folder = add_folder(&path, &project.id, root.to_str().unwrap()).unwrap();
         assert!(folder.exists);
         assert!(!folder.is_repo);
+        assert!(!folder.truncated);
         assert_eq!(folder.name, "root");
         assert_eq!(repo_paths(&folder), vec!["services/auth", "web"]);
         assert_eq!(folder.repos[0].path, root.join("services/auth").to_string_lossy());
@@ -376,6 +383,30 @@ mod tests {
     }
 
     #[test]
+    fn keeps_paths_with_trailing_spaces() {
+        let f = Fixture::new();
+        let path = f.config();
+        let project = create(&path, "P").unwrap();
+
+        // 目录名以空格结尾：不能被 trim 成另一个目录
+        let with_space = f.folder("repo ");
+        let without_space = f.folder("repo");
+        init_repo(&with_space.join("only-in-spaced"));
+
+        let folder = add_folder(&path, &project.id, with_space.to_str().unwrap()).unwrap();
+        assert_eq!(folder.name, "repo ", "文件夹名保留结尾空格");
+        assert_eq!(repo_paths(&folder), vec!["only-in-spaced"]);
+        assert_eq!(Path::new(&folder.path), with_space.as_path());
+
+        // 另一个（不含空格的）目录仍可单独添加
+        add_folder(&path, &project.id, without_space.to_str().unwrap()).unwrap();
+        assert_eq!(list(&path).unwrap()[0].folders.len(), 2);
+
+        // 空值校验与路径解析分开：空字符串报错，而不是去找 trim 后的目录
+        assert!(matches!(add_folder(&path, &project.id, ""), Err(AppError::Invalid(_))));
+    }
+
+    #[test]
     fn remove_folder_keeps_other_folders() {
         let f = Fixture::new();
         let path = f.config();
@@ -406,6 +437,29 @@ mod tests {
         assert!(!folder.exists);
         assert!(folder.repos.is_empty());
         assert!(!folder.is_repo);
+        assert!(!folder.truncated);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn folder_replaced_by_symlink_is_unavailable() {
+        let f = Fixture::new();
+        let path = f.config();
+        let project = create(&path, "P").unwrap();
+
+        let original = f.dir.path().join("work");
+        init_repo(&original.join("repo"));
+        add_folder(&path, &project.id, original.to_str().unwrap()).unwrap();
+
+        // 原目录被移走，同名的链接指向别处的仓库
+        let elsewhere = f.repo("elsewhere");
+        fs::remove_dir_all(&original).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &original).unwrap();
+
+        let listed = list(&path).unwrap();
+        let folder = &listed[0].folders[0];
+        assert!(!folder.exists, "被替换成符号链接的目录必须标记为不可用");
+        assert!(folder.repos.is_empty());
     }
 
     #[test]

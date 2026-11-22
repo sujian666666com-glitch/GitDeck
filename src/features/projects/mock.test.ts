@@ -67,6 +67,27 @@ describe("projectsMock", () => {
       path: "/Users/demo/code/gitdeck",
     });
     expect(folder.repos).toEqual([]);
+    expect(folder.truncated).toBe(false);
+  });
+
+  it("访问预算用尽的目录标记为部分结果", () => {
+    const project = call<ProjectNode>("projects_create", { name: "Monorepo" });
+    const folder = call<FolderNode>("projects_add_folder", {
+      projectId: project.id,
+      path: "/Users/demo/code/monorepo",
+    });
+    expect(folder.truncated).toBe(true);
+    expect(folder.repos.map((repo) => repo.name)).toEqual(["apps/admin", "apps/web"]);
+  });
+
+  it("不 trim 路径（目录名可能以空格结尾）", () => {
+    const project = call<ProjectNode>("projects_create", { name: "Spaces" });
+    const folder = call<FolderNode>("projects_add_folder", {
+      projectId: project.id,
+      path: "/Users/demo/code/gitdeck ",
+    });
+    expect(folder.path).toBe("/Users/demo/code/gitdeck ");
+    expect(folder.name).toBe("gitdeck ");
   });
 
   it("不存在的项目 / 文件夹返回 notFound", async () => {

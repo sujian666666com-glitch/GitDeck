@@ -3,9 +3,12 @@ import {
   collectNodeIds,
   expandNode,
   findRepo,
+  findRepoIn,
   flattenProjects,
   loadExpanded,
   pruneExpanded,
+  reconcileSelection,
+  sameSelection,
   toggleExpanded,
   type TreeRow,
 } from "./tree";
@@ -22,6 +25,7 @@ const projects: ProjectNode[] = [
         name: "backend",
         exists: true,
         isRepo: false,
+        truncated: false,
         repos: [
           { path: "/code/backend/casdoor", name: "casdoor" },
           { path: "/code/backend/sso", name: "sso" },
@@ -33,6 +37,7 @@ const projects: ProjectNode[] = [
         name: "empty",
         exists: true,
         isRepo: false,
+        truncated: false,
         repos: [],
       },
       {
@@ -41,11 +46,46 @@ const projects: ProjectNode[] = [
         name: "gone",
         exists: false,
         isRepo: false,
+        truncated: false,
         repos: [],
       },
     ],
   },
   { id: "p2", name: "SWClaw", folders: [] },
+];
+
+/** 同一个仓库被添加到两个项目 */
+const shared: ProjectNode[] = [
+  {
+    id: "pa",
+    name: "A",
+    folders: [
+      {
+        id: "fa",
+        path: "/code/a",
+        name: "a",
+        exists: true,
+        isRepo: false,
+        truncated: false,
+        repos: [{ path: "/code/shared", name: "a/shared" }],
+      },
+    ],
+  },
+  {
+    id: "pb",
+    name: "B",
+    folders: [
+      {
+        id: "fb",
+        path: "/code/b",
+        name: "b",
+        exists: true,
+        isRepo: false,
+        truncated: false,
+        repos: [{ path: "/code/shared", name: "b/shared" }],
+      },
+    ],
+  },
 ];
 
 /** 便于断言的行摘要 */
@@ -114,24 +154,16 @@ describe("flattenProjects", () => {
   });
 
   it("行 key 唯一（同一仓库被添加到两个项目也不冲突）", () => {
-    const duplicated: ProjectNode[] = [
-      ...projects,
-      {
-        id: "p3",
-        name: "Other",
-        folders: [
-          {
-            id: "f9",
-            path: "/code/other",
-            name: "other",
-            exists: true,
-            isRepo: false,
-            repos: [{ path: "/code/backend/casdoor", name: "casdoor" }],
-          },
-        ],
-      },
-    ];
-    const keys = flattenProjects(duplicated, ["p1", "f1", "f2", "p2", "p3", "f9"]).map((row) => row.key);
+    const keys = flattenProjects([...projects, ...shared], [
+      "p1",
+      "f1",
+      "f2",
+      "p2",
+      "pa",
+      "fa",
+      "pb",
+      "fb",
+    ]).map((row) => row.key);
     expect(new Set(keys).size).toBe(keys.length);
   });
 });
@@ -163,7 +195,7 @@ describe("展开状态", () => {
   });
 });
 
-describe("findRepo", () => {
+describe("findRepo / findRepoIn", () => {
   it("按路径找到仓库及其所属项目 / 文件夹", () => {
     const found = findRepo(projects, "/code/backend/sso");
     expect(found?.project.name).toBe("AgentFlow");
@@ -173,5 +205,97 @@ describe("findRepo", () => {
 
   it("找不到时返回 null", () => {
     expect(findRepo(projects, "/code/nope")).toBeNull();
+  });
+
+  it("findRepoIn 只在指定项目内查找", () => {
+    expect(findRepoIn(shared, "pa", "/code/shared")?.folder.id).toBe("fa");
+    expect(findRepoIn(shared, "pb", "/code/shared")?.folder.id).toBe("fb");
+    expect(findRepoIn(shared, "pc", "/code/shared")).toBeNull();
+    expect(findRepoIn(shared, "pa", "/code/other")).toBeNull();
+  });
+});
+
+describe("reconcileSelection", () => {
+  const selection = {
+    repoPath: "/code/backend/sso",
+    repoName: "sso",
+    projectId: "p1",
+    projectName: "AgentFlow",
+  };
+
+  it("没有选中时保持清空", () => {
+    expect(reconcileSelection(projects, null)).toBeNull();
+  });
+
+  it("命中（projectId, repoPath）时保持原对象", () => {
+    expect(reconcileSelection(projects, selection)).toBe(selection);
+  });
+
+  it("项目重命名后同步 projectName", () => {
+    const renamed: ProjectNode[] = projects.map((project) =>
+      project.id === "p1" ? { ...project, name: "AgentFlow 2" } : project,
+    );
+    const next = reconcileSelection(renamed, selection);
+    expect(next).toEqual({ ...selection, projectName: "AgentFlow 2" });
+  });
+
+  it("原项目消失但仓库还在其他项目时切换归属", () => {
+    const next = reconcileSelection(shared.slice(1), { repoPath: "/code/shared", repoName: "a/shared", projectId: "pa", projectName: "A" });
+    expect(next).toEqual({
+      repoPath: "/code/shared",
+      repoName: "b/shared",
+      projectId: "pb",
+      projectName: "B",
+    });
+  });
+
+  it("同一项目内仓库换了文件夹时保持项目", () => {
+    const moved: ProjectNode[] = [
+      {
+        ...shared[0],
+        folders: [
+          {
+            id: "fa2",
+            path: "/code/a2",
+            name: "a2",
+            exists: true,
+            isRepo: false,
+            truncated: false,
+            repos: [{ path: "/code/shared", name: "a2/shared" }],
+          },
+        ],
+      },
+    ];
+    const next = reconcileSelection(moved, {
+      repoPath: "/code/shared",
+      repoName: "a/shared",
+      projectId: "pa",
+      projectName: "A",
+    });
+    expect(next?.repoName).toBe("a2/shared");
+    expect(next?.projectId).toBe("pa");
+  });
+
+  it("所有位置都消失时返回 null", () => {
+    expect(reconcileSelection([], selection)).toBeNull();
+    expect(
+      reconcileSelection(projects, { ...selection, repoPath: "/code/removed", repoName: "removed" }),
+    ).toBeNull();
+  });
+});
+
+describe("sameSelection", () => {
+  const a = { repoPath: "/code/x", repoName: "x", projectId: "p1", projectName: "P" };
+
+  it("同一对象与同值时相等", () => {
+    expect(sameSelection(a, a)).toBe(true);
+    expect(sameSelection(a, { ...a })).toBe(true);
+    expect(sameSelection(null, null)).toBe(true);
+  });
+
+  it("项目或路径不同时不相等", () => {
+    expect(sameSelection(a, { ...a, projectId: "p2" })).toBe(false);
+    expect(sameSelection(a, { ...a, repoPath: "/code/y" })).toBe(false);
+    expect(sameSelection(a, null)).toBe(false);
   });
 });

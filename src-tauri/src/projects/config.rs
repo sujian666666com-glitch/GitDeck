@@ -13,7 +13,8 @@
 //!
 //! - 文件不存在视为空列表；
 //! - JSON 损坏或版本不认识时返回 `AppError::Config`，绝不覆盖原文件；
-//! - 写入先落到同目录临时文件再 `rename`，避免写到一半留下残文件。
+//! - 写入先在目标同目录独占创建名称唯一的临时文件（`create_new`），落盘后 `rename` 覆盖目标，
+//!   任何失败都清理自己创建的临时文件。跨进程互斥由应用的单实例机制保证。
 
 use std::fs;
 use std::io::{ErrorKind, Write};
@@ -86,13 +87,10 @@ pub fn save(path: &Path, config: &StoredConfig) -> AppResult<()> {
     }
 
     let bytes = serde_json::to_vec_pretty(config)?;
-    let temp = temp_path(path);
+    let (mut file, temp) = create_temp_file(path)?;
 
-    let written = (|| -> std::io::Result<()> {
-        let mut file = fs::File::create(&temp)?;
-        file.write_all(&bytes)?;
-        file.sync_all()
-    })();
+    let written = file.write_all(&bytes).and_then(|()| file.sync_all());
+    drop(file);
     if let Err(err) = written {
         let _ = fs::remove_file(&temp);
         return Err(AppError::Config(format!("写入项目配置失败：{err}")));
@@ -105,10 +103,21 @@ pub fn save(path: &Path, config: &StoredConfig) -> AppResult<()> {
     Ok(())
 }
 
-fn temp_path(path: &Path) -> PathBuf {
-    let mut name = path.file_name().map(|name| name.to_os_string()).unwrap_or_default();
-    name.push(".tmp");
-    path.with_file_name(name)
+/// 在目标同目录独占创建名称唯一的临时文件（`projects.json.<pid>.<uuid>.tmp`）
+fn create_temp_file(target: &Path) -> AppResult<(fs::File, PathBuf)> {
+    let dir = target.parent().unwrap_or_else(|| Path::new("."));
+    let base = target.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+
+    for _ in 0..8 {
+        let name = format!("{base}.{}.{}.tmp", std::process::id(), uuid::Uuid::new_v4().simple());
+        let candidate = dir.join(name);
+        match fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(file) => return Ok((file, candidate)),
+            Err(err) if err.kind() == ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(AppError::Config(format!("创建临时配置文件失败：{err}"))),
+        }
+    }
+    Err(AppError::Config("创建临时配置文件失败：临时文件名重复".into()))
 }
 
 #[cfg(test)]
@@ -134,6 +143,15 @@ mod tests {
         assert!(config.projects.is_empty());
     }
 
+    fn temp_files(dir: &Path) -> Vec<String> {
+        fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect()
+    }
+
     #[test]
     fn saves_and_reads_back() {
         let dir = tempfile::tempdir().unwrap();
@@ -143,12 +161,45 @@ mod tests {
         assert_eq!(load(&path).unwrap(), config);
 
         // 写入后不残留临时文件
-        let leftovers: Vec<_> = fs::read_dir(path.parent().unwrap())
-            .unwrap()
-            .flatten()
-            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
-            .collect();
-        assert!(leftovers.is_empty());
+        assert!(temp_files(path.parent().unwrap()).is_empty());
+    }
+
+    #[test]
+    fn temp_file_names_are_unique_and_next_to_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CONFIG_FILE_NAME);
+
+        let (first, first_path) = create_temp_file(&path).unwrap();
+        let (second, second_path) = create_temp_file(&path).unwrap();
+        assert_ne!(first_path, second_path, "临时文件名必须唯一");
+        assert_eq!(first_path.parent(), path.parent(), "临时文件必须与目标同目录");
+
+        let name = first_path.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("projects.json."), "{name}");
+        assert!(name.ends_with(".tmp"), "{name}");
+
+        drop(first);
+        drop(second);
+        fs::remove_file(&first_path).unwrap();
+        fs::remove_file(&second_path).unwrap();
+    }
+
+    #[test]
+    fn failed_save_keeps_target_and_cleans_temp_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        save(&path, &sample()).unwrap();
+        let before = fs::read(&path).unwrap();
+
+        // 目标位置被目录占用：rename 必然失败
+        let blocked = dir.path().join("blocked.json");
+        fs::create_dir(&blocked).unwrap();
+        let err = save(&blocked, &sample()).unwrap_err();
+        assert!(matches!(err, AppError::Config(_)));
+        assert!(blocked.is_dir(), "失败时不能动目标路径");
+
+        assert_eq!(fs::read(&path).unwrap(), before, "失败时旧配置必须完整");
+        assert!(temp_files(dir.path()).is_empty(), "失败时必须清理自己的临时文件");
     }
 
     #[test]

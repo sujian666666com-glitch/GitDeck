@@ -1,7 +1,8 @@
 /**
- * 项目树的纯逻辑：展开状态（localStorage）、树扁平化、选中仓库查找。
+ * 项目树的纯逻辑：展开状态（localStorage）、树扁平化、选中仓库查找与校准。
  * 与渲染无关，便于单测。
  */
+import type { RepoSelection } from "@/app/AppState";
 import type { FolderNode, ProjectNode, RepoNode } from "./types";
 
 /** 展开状态保存位置：projectId / folderId 的数组 */
@@ -92,7 +93,7 @@ export interface RepoLocation {
   repo: RepoNode;
 }
 
-/** 在树中查找仓库（仓库路径是唯一标识） */
+/** 在整棵树中按路径查找仓库（同一仓库可能出现在多个项目中，返回第一个） */
 export function findRepo(projects: readonly ProjectNode[], repoPath: string): RepoLocation | null {
   for (const project of projects) {
     for (const folder of project.folders) {
@@ -102,6 +103,60 @@ export function findRepo(projects: readonly ProjectNode[], repoPath: string): Re
     }
   }
   return null;
+}
+
+/** 在指定项目内按路径查找仓库 */
+export function findRepoIn(
+  projects: readonly ProjectNode[],
+  projectId: string,
+  repoPath: string,
+): RepoLocation | null {
+  const project = projects.find((item) => item.id === projectId);
+  if (!project) return null;
+  for (const folder of project.folders) {
+    for (const repo of folder.repos) {
+      if (repo.path === repoPath) return { project, folder, repo };
+    }
+  }
+  return null;
+}
+
+/** 两个选中记录是否指向同一项目下的同一仓库 */
+export function sameSelection(a: RepoSelection | null, b: RepoSelection | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.repoPath === b.repoPath &&
+    a.projectId === b.projectId &&
+    a.repoName === b.repoName &&
+    a.projectName === b.projectName
+  );
+}
+
+/**
+ * 用新树校准当前选中：
+ * 1. 优先按（projectId, repoPath）匹配，命中时同步项目 / 仓库的显示名（项目重命名）；
+ * 2. 原项目消失但同一路径的仓库仍在其他项目中时，切换为那个项目；
+ * 3. 所有位置都消失时返回 null（调用方据此清空选中）。
+ */
+export function reconcileSelection(
+  projects: readonly ProjectNode[],
+  selection: RepoSelection | null,
+): RepoSelection | null {
+  if (!selection) return null;
+
+  const current = findRepoIn(projects, selection.projectId, selection.repoPath);
+  const found = current ?? findRepo(projects, selection.repoPath);
+  if (!found) return null;
+
+  const next: RepoSelection = {
+    repoPath: found.repo.path,
+    repoName: found.repo.name,
+    projectId: found.project.id,
+    projectName: found.project.name,
+  };
+  // 字段完全一致时返回原对象，避免无意义的重渲染
+  return sameSelection(next, selection) ? selection : next;
 }
 
 /** 读取展开状态；从未保存过（首次启动）返回 null */
