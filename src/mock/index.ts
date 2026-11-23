@@ -1,4 +1,5 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { terminalMock } from "@/features/terminal/mock";
 import { changesMock } from "@/features/changes/mock";
 import { graphMock } from "@/features/graph/mock";
 import { projectsMock } from "@/features/projects/mock";
@@ -11,7 +12,7 @@ const shared: MockHandlers = {
 
 /** 在浏览器中用 mock 数据代替 Tauri 后端（仅 `pnpm dev` 且不在 Tauri 中时启用） */
 export function installMocks(): void {
-  const handlers: MockHandlers = { ...shared, ...projectsMock, ...graphMock, ...changesMock };
+  const handlers: MockHandlers = { ...shared, ...projectsMock, ...graphMock, ...changesMock, ...terminalMock };
   mockIPC(async (command, payload) => {
     await new Promise((resolve) => setTimeout(resolve, 60 + Math.random() * 140));
     const handler = handlers[command];

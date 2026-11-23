@@ -1,5 +1,4 @@
 import { FolderGit2, GitBranch } from "lucide-react";
-import { useEffect } from "react";
 import { useAppState, type RepoSelection, type ViewTab } from "@/app/AppState";
 import { EmptyState } from "@/components/ui/feedback";
 import { Pill } from "@/components/ui/pill";
@@ -7,7 +6,7 @@ import { ChangesView } from "@/features/changes/ChangesView";
 import { SyncActions } from "@/features/changes/SyncActions";
 import { GraphView } from "@/features/graph/GraphView";
 import { cn } from "@/lib/cn";
-import { isMac, isModKey } from "@/lib/runtime";
+import { label, type Preferences } from "@/features/settings/preferences";
 
 const TABS: { id: ViewTab; label: string }[] = [
   { id: "graph", label: "Git Graph" },
@@ -15,21 +14,8 @@ const TABS: { id: ViewTab; label: string }[] = [
 ];
 
 /** 右栏：仓库头部 + Git Graph / Changes 两个视图 */
-export function RepoView() {
+export function RepoView({ keys }: { keys: Preferences["keys"] }) {
   const { selection, tab, setTab } = useAppState();
-
-  // ⌘1 / ⌘2（Windows 为 Ctrl）切换视图
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (!isModKey(event) || event.altKey || event.shiftKey) return;
-      if (event.key === "1") setTab("graph");
-      else if (event.key === "2") setTab("changes");
-      else return;
-      event.preventDefault();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [setTab]);
 
   if (!selection) {
     return (
@@ -45,7 +31,7 @@ export function RepoView() {
   return (
     <div className="flex min-h-0 flex-1 flex-col px-5 pb-4">
       <RepoHeader selection={selection} />
-      <ViewTabs value={tab} onChange={setTab} />
+      <ViewTabs keys={keys} value={tab} onChange={setTab} />
       {/* 两个视图都保持挂载，切换时保留滚动位置与输入的提交信息；切换仓库时整体重建 */}
       <div key={selection.repoPath} className="relative mt-3 min-h-0 flex-1">
         <section className={cn("absolute inset-0 flex flex-col", tab !== "graph" && "hidden")}>
@@ -76,11 +62,10 @@ function RepoHeader({ selection }: { selection: RepoSelection }) {
   );
 }
 
-function ViewTabs({ value, onChange }: { value: ViewTab; onChange: (tab: ViewTab) => void }) {
-  const mod = isMac ? "⌘" : "Ctrl+";
+function ViewTabs({ value, onChange, keys }: { keys: Preferences["keys"]; value: ViewTab; onChange: (tab: ViewTab) => void }) {
   return (
     <div role="tablist" aria-label="仓库视图" className="grid shrink-0 grid-cols-2 gap-1">
-      {TABS.map((item, index) => {
+      {TABS.map((item) => {
         const selected = value === item.id;
         return (
           <button
@@ -88,7 +73,7 @@ function ViewTabs({ value, onChange }: { value: ViewTab; onChange: (tab: ViewTab
             type="button"
             role="tab"
             aria-selected={selected}
-            title={`${item.label}（${mod}${index + 1}）`}
+            title={`${item.label}（${label(keys[item.id])}）`}
             onClick={() => onChange(item.id)}
             className={cn(
               "h-8 rounded-full text-[13px] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-focus",
