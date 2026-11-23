@@ -1,10 +1,11 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useReducer } from "react";
 import { useAppState } from "./AppState";
 import { Settings } from "@/features/settings/Settings";
 import { chord, label, usePreferences } from "@/features/settings/preferences";
 import { IconButton } from "@/components/ui/button";
 import { emitRepoChanged } from "@/lib/events";
-import { GitBranch, SquareTerminal, X } from "lucide-react";
+import { updatePanels, type Panel } from "@/features/terminal/panels";
+import { GitBranch, Plus, SquareTerminal, X } from "lucide-react";
 import { RepoView } from "@/app/RepoView";
 import { ProjectsPanel } from "@/features/projects/ProjectsPanel";
 import { isMac } from "@/lib/runtime";
@@ -16,17 +17,14 @@ export function Shell() {
   const { prefs, setPrefs, dark } = usePreferences();
   const { selection, setTab } = useAppState();
   const path = selection?.repoPath;
-  const [panels, setPanels] = useState<Map<string, boolean>>(() => new Map());
+  const [panels, dispatch] = useReducer(updatePanels, new Map<string, Panel>());
+  const panel = path ? panels.get(path) : undefined;
   const toggle = useCallback(() => {
-    if (path) setPanels(old => new Map(old).set(path, !old.get(path)));
+    if (path) dispatch({ type: "toggle", path });
   }, [path]);
   const close = () => {
     if (!path) return;
-    setPanels(old => {
-      const next = new Map(old);
-      next.delete(path);
-      return next;
-    });
+    dispatch({ type: "close", path });
     emitRepoChanged(path);
   };
   useEffect(() => {
@@ -59,14 +57,24 @@ export function Shell() {
         {isMac && <div data-tauri-drag-region className="h-7 shrink-0" />}
         <RepoView keys={prefs.keys} />
         {path && <div className="flex shrink-0 items-center justify-between border-t border-line px-4 py-1">
-          <button className="flex items-center gap-2 rounded-md px-2 py-1 text-muted hover:bg-hover hover:text-ink" aria-expanded={!!panels.get(path)} onClick={toggle} title={label(prefs.keys.terminal)}>
+          <button className="flex items-center gap-2 rounded-md px-2 py-1 text-muted hover:bg-hover hover:text-ink" aria-expanded={!!panel?.open} onClick={toggle} title={label(prefs.keys.terminal)}>
             <SquareTerminal size={15} />终端
           </button>
-          {panels.get(path) && <IconButton label="关闭终端会话" onClick={close}><X /></IconButton>}
+          {panel?.open && <div className="flex items-center gap-1">
+            <IconButton label="新建终端" onClick={() => dispatch({ type: "add", path })}><Plus /></IconButton>
+            <select aria-label="切换终端会话" value={panel.active}
+              className="rounded-md bg-app px-1 text-xs text-ink-2 hover:bg-hover"
+              onChange={event => dispatch({ type: "select", path, session: Number(event.target.value) })}>
+              {panel.sessions.map(id => <option key={id} value={id}>终端 {id}</option>)}
+            </select>
+            <IconButton label="关闭当前终端会话" onClick={close}><X /></IconButton>
+          </div>}
         </div>}
-        {Array.from(panels, ([repoPath, open]) => <Suspense key={repoPath} fallback={null}>
-          <TerminalPane path={repoPath} dark={dark} visible={repoPath === path && open} />
-        </Suspense>)}
+        {Array.from(panels, ([repoPath, group]) => group.sessions.map(id => (
+          <Suspense key={repoPath + ":" + id} fallback={null}>
+            <TerminalPane path={repoPath} dark={dark} visible={repoPath === path && group.open && group.active === id} />
+          </Suspense>
+        ))).flat()}
       </main>
     </div>
   );
