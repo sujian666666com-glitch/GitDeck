@@ -71,12 +71,19 @@ export function Settings({ prefs, save }: { prefs: Preferences; save: (prefs: Pr
             <div key={action} className="flex items-center justify-between py-1">
               <span>{actions[action]}</span>
               <Button size="sm" variant="outline" aria-label={actions[action] + "快捷键"}
-                onBlur={() => edit(null)} onClick={() => { edit(action); setError(""); }}
+                onBlur={() => edit(null)}
+                onClick={event => {
+                  // macOS WebKit 点击按钮时可能保留原焦点，录入按键必须送到当前按钮。
+                  event.currentTarget.focus();
+                  edit(action);
+                  setError("");
+                }}
                 onKeyDown={event => record(event, action)}>
                 {editing === action ? "请按组合键…" : label(prefs.keys[action])}
               </Button>
             </div>
           ))}
+          {editing && !error && <p className="mt-2 text-muted">现在按下新组合，例如 Ctrl + Shift + T，即可保存。</p>}
           {error && <p role="alert" className="mt-2 text-st-deleted">{error}</p>}
         </Dialog.Content>
       </Dialog.Portal>
