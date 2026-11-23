@@ -2,6 +2,10 @@
 
 面向参与开发的人和编码 Agent。产品与界面需求见 [产品设计](docs/product-design.md)、[界面设计](docs/ui-design.md)。
 
+## 开发原则
+
+GitDeck 追求极简和低资源占用。设计和实现功能时，优先选择交互清晰、实现简单的方案，留意安装包体积、运行内存和后台 CPU 占用。数据按需加载，尽量复用现有组件和依赖。
+
 ## 技术栈与常用命令
 
 Tauri 2 · React 19 · TypeScript 7 · Vite 8 · Tailwind CSS 4 · lucide-react · radix-ui · sonner · @tanstack/react-virtual · vitest；包管理用 pnpm。

@@ -25,7 +25,7 @@ export function Tip({
           side={side}
           sideOffset={6}
           collisionPadding={8}
-          className="z-50 max-w-[360px] rounded-md bg-ink/90 px-2 py-1 text-[12px] leading-snug break-all text-white shadow-pop"
+          className="z-50 max-w-[360px] rounded-md bg-ink/90 px-2 py-1 text-[12px] leading-snug break-all text-surface shadow-pop"
         >
           {content}
         </Tooltip.Content>

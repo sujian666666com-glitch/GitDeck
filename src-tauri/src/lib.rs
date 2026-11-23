@@ -13,12 +13,13 @@ pub mod error;
 pub mod git;
 pub mod graph;
 pub mod projects;
+pub mod terminal;
+use tauri::Manager;
 
 pub fn run() {
     tauri::Builder::default()
         // 单实例：再次启动时聚焦已有窗口，避免两个进程同时读写同一份项目配置
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            use tauri::Manager;
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.show();
@@ -26,6 +27,7 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .manage(terminal::Sessions::default())
         .invoke_handler(tauri::generate_handler![
             // ── 项目管理（projects）──
             projects::commands::projects_list,
@@ -59,8 +61,16 @@ pub fn run() {
             changes::commands::changes_operation_continue,
             changes::commands::changes_operation_abort,
 
-            // ── 结束 ──
+            terminal::terminal_open,
+            terminal::terminal_write,
+            terminal::terminal_resize,
+            terminal::terminal_close,
         ])
-        .run(tauri::generate_context!())
-        .expect("GitDeck 启动失败");
+        .build(tauri::generate_context!())
+        .expect("GitDeck 启动失败")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                app.state::<terminal::Sessions>().clear();
+            }
+        });
 }

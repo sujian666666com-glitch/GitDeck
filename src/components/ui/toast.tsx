@@ -8,7 +8,7 @@ export function Toaster() {
       offset={16}
       gap={8}
       visibleToasts={4}
-      toastOptions={{ style: { borderRadius: 12, fontSize: 13, fontFamily: "var(--font-sans)" } }}
+      toastOptions={{ style: { borderRadius: 12, fontSize: 13, fontFamily: "var(--font-sans)", background: "var(--color-surface)", color: "var(--color-ink)", borderColor: "var(--color-line)" } }}
     />
   );
 }
