@@ -1,1 +1,24 @@
 .DS_Store
+
+# 全局 gitignore 忽略了 *.json，这里重新纳入项目内的 JSON（package.json、tauri.conf.json 等）
+!*.json
+# 重新纳入后，个人本地配置仍不入库
+.claude/settings.local.json
+
+# 依赖与构建产物
+node_modules/
+dist/
+coverage/
+*.log
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# 本地工具状态
+.omc/
+.vite/
+
+# 个人学习清单
+ik.md
+
+# Claude 预览配置（本机）
+.claude/launch.json
