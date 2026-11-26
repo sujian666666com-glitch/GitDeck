@@ -1,6 +1,6 @@
 import type { FileDiff } from "@/lib/diff";
 import { mockError, type MockHandlers } from "@/mock/types";
-import type { RepoStatus, StatusFile } from "./types";
+import type { CommitAiConfig, RepoStatus, StatusFile } from "./types";
 
 /** 浏览器预览数据：对照原型的 login.ts (M)、auth.ts (M)、config.json (U) */
 let staged: StatusFile[] = [];
@@ -56,6 +56,29 @@ new file mode 100644
 
 export const changesMock: MockHandlers = {
   changes_status: () => status(),
+
+  changes_generate_message: ({ config }: { config: CommitAiConfig }) => {
+    if (!config.baseUrl.trim() || !config.model.trim()) {
+      mockError("invalid", "请先在设置的「AI 提交信息」中填写 API 地址和模型名");
+    }
+    const files = staged.length ? staged : unstaged;
+    if (!files.length) mockError("invalid", "没有可生成提交信息的更改");
+    const changesLogin = files.some(file => file.path.startsWith("src/"));
+    if (changesLogin && files.some(file => file.path === "config.json")) {
+      return [
+        "feat(auth): 启用单点登录并在登录前刷新会话",
+        "",
+        "change-id: refresh-sso-session",
+        "",
+        "- 创建登录会话前先等待会话刷新完成",
+        "- 启用单点登录并将超时设为 30",
+        "- 测试与验证：未提供测试结果。",
+      ].join("\n");
+    }
+    return changesLogin
+      ? "fix(auth): 登录前刷新会话"
+      : "chore(config): 启用单点登录配置";
+  },
 
   changes_file_diff: ({ path, staged: fromIndex }: { path: string; staged: boolean }): FileDiff => {
     const list = fromIndex ? staged : unstaged;

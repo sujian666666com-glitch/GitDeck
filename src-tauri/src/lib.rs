@@ -55,6 +55,7 @@ pub fn run() {
             changes::commands::changes_unstage,
             changes::commands::changes_discard,
             changes::commands::changes_commit,
+            changes::commands::changes_generate_message,
             changes::commands::remote_fetch,
             changes::commands::remote_pull,
             changes::commands::remote_push,

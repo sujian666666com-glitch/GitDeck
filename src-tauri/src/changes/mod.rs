@@ -5,6 +5,7 @@ pub mod commands;
 pub mod commit;
 pub mod diff;
 pub mod lock;
+mod message;
 pub mod operation;
 pub mod remote;
 pub mod stage;

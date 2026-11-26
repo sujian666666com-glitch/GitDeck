@@ -7,7 +7,7 @@ use super::operation::{operation_abort, operation_continue};
 use super::remote::{fetch_remote, pull_remote, push_remote};
 use super::stage::{discard_paths, stage_paths, unstage_paths};
 use super::status::get_repo_status;
-use super::types::{CommitResult, RepoStatus};
+use super::types::{CommitAiConfig, CommitResult, RepoStatus};
 use crate::error::{blocking, AppResult};
 use crate::git::FileDiff;
 
@@ -42,6 +42,11 @@ pub async fn changes_discard(repo_path: String, paths: Vec<String>) -> AppResult
 #[tauri::command]
 pub async fn changes_commit(repo_path: String, message: String, amend: bool) -> AppResult<CommitResult> {
     blocking(move || create_commit(&repo_path, &message, amend)).await
+}
+
+#[tauri::command]
+pub async fn changes_generate_message(repo_path: String, config: CommitAiConfig) -> AppResult<String> {
+    blocking(move || super::message::generate(&repo_path, config)).await
 }
 
 #[tauri::command]

@@ -8,6 +8,7 @@ import {
   FileCode2,
   Minus,
   Plus,
+  Sparkles,
   Undo2,
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -30,6 +31,7 @@ import { CountBadge } from "@/components/ui/pill";
 import { notify } from "@/components/ui/toast";
 import { Tip } from "@/components/ui/tooltip";
 import { changesApi } from "@/features/changes/api";
+import { readCommitAiConfig } from "@/features/settings/commitAiConfig";
 import type { ChangeKind, RepoStatus, StatusFile } from "@/features/changes/types";
 import {
   getBadgeInfo,
@@ -58,7 +60,9 @@ export function ChangesView({ repoPath, active }: ChangesViewProps) {
   const [loading, setLoading] = useState(false);
 
   // 统一写操作互斥状态 (G7, S1)
-  const [isOperating, setIsOperating] = useState(false);
+  const [isWriting, setIsWriting] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const isOperating = isWriting || generating;
 
   // Diff 展开状态（手风琴：同一时刻最多展开一个，记录所属分区 S2）
   const [expandedDiff, setExpandedDiff] = useState<{
@@ -204,13 +208,13 @@ export function ChangesView({ repoPath, active }: ChangesViewProps) {
   // 暂存操作
   const handleStage = async (paths: string[]) => {
     if (isOperating) return;
-    setIsOperating(true);
+    setIsWriting(true);
     try {
       await changesApi.stage(repoPath, paths);
     } catch (err) {
       notify.error(err, "暂存失败");
     } finally {
-      setIsOperating(false);
+      setIsWriting(false);
       emitRepoChanged(repoPath, "worktree");
     }
   };
@@ -218,13 +222,13 @@ export function ChangesView({ repoPath, active }: ChangesViewProps) {
   // 取消暂存
   const handleUnstage = async (paths: string[]) => {
     if (isOperating) return;
-    setIsOperating(true);
+    setIsWriting(true);
     try {
       await changesApi.unstage(repoPath, paths);
     } catch (err) {
       notify.error(err, "取消暂存失败");
     } finally {
-      setIsOperating(false);
+      setIsWriting(false);
       emitRepoChanged(repoPath, "worktree");
     }
   };
@@ -234,13 +238,13 @@ export function ChangesView({ repoPath, active }: ChangesViewProps) {
     if (isOperating || !status) return;
     const options = getDiscardConfirmOptions(paths, status.unstaged, status.staged);
     if (await confirmDialog(options)) {
-      setIsOperating(true);
+      setIsWriting(true);
       try {
         await changesApi.discard(repoPath, paths);
       } catch (err) {
         notify.error(err, "丢弃更改失败");
       } finally {
-        setIsOperating(false);
+        setIsWriting(false);
         emitRepoChanged(repoPath, "worktree");
       }
     }
@@ -259,14 +263,14 @@ export function ChangesView({ repoPath, active }: ChangesViewProps) {
   // 继续进行中的操作 (G5)
   const handleContinue = async () => {
     if (isOperating) return;
-    setIsOperating(true);
+    setIsWriting(true);
     try {
       await changesApi.operationContinue(repoPath);
       notify.success("已成功继续当前操作");
     } catch (err) {
       notify.error(err, "继续操作失败");
     } finally {
-      setIsOperating(false);
+      setIsWriting(false);
       emitRepoChanged(repoPath, "all");
     }
   };
@@ -282,14 +286,14 @@ export function ChangesView({ repoPath, active }: ChangesViewProps) {
     });
     if (!ok) return;
 
-    setIsOperating(true);
+    setIsWriting(true);
     try {
       await changesApi.operationAbort(repoPath);
       notify.success("已成功中止操作并还原状态");
     } catch (err) {
       notify.error(err, "中止操作失败");
     } finally {
-      setIsOperating(false);
+      setIsWriting(false);
       emitRepoChanged(repoPath, "all");
     }
   };
@@ -310,7 +314,7 @@ export function ChangesView({ repoPath, active }: ChangesViewProps) {
     }
 
     const currentRepo = repoPath;
-    setIsOperating(true);
+    setIsWriting(true);
     try {
       const isAmend = action === "amend";
       const res = await changesApi.commit(repoPath, commitMsg, isAmend);
@@ -342,7 +346,7 @@ export function ChangesView({ repoPath, active }: ChangesViewProps) {
     } catch (err) {
       notify.error(err, "提交失败");
     } finally {
-      setIsOperating(false);
+      setIsWriting(false);
       emitRepoChanged(currentRepo, "all");
     }
   };
@@ -351,6 +355,20 @@ export function ChangesView({ repoPath, active }: ChangesViewProps) {
   const unstagedCount = status?.unstaged.length ?? 0;
   const conflictedCount = status?.conflicted.length ?? 0;
   const totalCount = stagedCount + unstagedCount + conflictedCount;
+  const canGenerate = !isOperating && conflictedCount === 0 && totalCount > 0 && status?.operation !== "rebase";
+
+  async function generateMessage() {
+    if (!canGenerate) return;
+    setGenerating(true);
+    try {
+      const message = await changesApi.generateMessage(repoPath, readCommitAiConfig());
+      setCommitMsg(current => current === commitMsg ? message : current);
+    } catch (err) {
+      notify.error(err, "生成提交信息失败");
+    } finally {
+      setGenerating(false);
+    }
+  }
 
   const operationBanner = getOperationBanner(status?.operation ?? null);
 
@@ -634,24 +652,31 @@ export function ChangesView({ repoPath, active }: ChangesViewProps) {
 
       {/* 底部固定提交区 */}
       <div className="shrink-0 border-t border-line bg-app pt-3 pb-1">
-        <textarea
-          value={commitMsg}
-          disabled={isOperating || status?.operation === "rebase"}
-          onChange={(e) => setCommitMsg(e.target.value)}
-          onKeyDown={(e) => {
-            if (isModKey(e) && e.key === "Enter") {
-              e.preventDefault();
-              void executeCommit("commit");
+        <div className="relative">
+          <textarea
+            value={commitMsg}
+            disabled={isWriting || status?.operation === "rebase"}
+            onChange={(e) => setCommitMsg(e.target.value)}
+            onKeyDown={(e) => {
+              if (isModKey(e) && e.key === "Enter") {
+                e.preventDefault();
+                void executeCommit("commit");
+              }
+            }}
+            placeholder={
+              status?.operation === "rebase"
+                ? "正在变基，请在上方使用「继续」完成变基..."
+                : "提交信息..."
             }
-          }}
-          placeholder={
-            status?.operation === "rebase"
-              ? "正在变基，请在上方使用「继续」完成变基..."
-              : "提交信息..."
-          }
-          rows={3}
-          className="w-full resize-none rounded-card border border-line-strong bg-surface p-3 text-[13px] text-ink outline-none placeholder:text-faint focus:border-accent disabled:opacity-50"
-        />
+            rows={Math.min(8, Math.max(3, commitMsg.split("\n").length))}
+            className="block w-full resize-none rounded-card border border-line-strong bg-surface p-3 pr-11 text-[13px] text-ink outline-none placeholder:text-faint focus:border-accent disabled:opacity-50"
+          />
+          <IconButton className="absolute right-2 top-2"
+            label={generating ? "正在生成提交信息" : commitMsg ? "用 AI 重新生成提交信息" : "用 AI 生成提交信息"}
+            disabled={!canGenerate} aria-busy={generating} onClick={generateMessage}>
+            {generating ? <Spinner /> : <Sparkles />}
+          </IconButton>
+        </div>
 
         <div className="mt-2 flex items-center gap-1.5">
           {/* 主按钮固定为「提交」，悬停提示智能提交说明 (S1, L14) */}
@@ -672,7 +697,7 @@ export function ChangesView({ repoPath, active }: ChangesViewProps) {
                 onClick={() => void executeCommit("commit")}
                 className="w-full font-medium"
               >
-                {isOperating ? <Spinner className="text-white" /> : "提交"}
+                {isWriting ? <Spinner className="text-white" /> : "提交"}
               </Button>
             </span>
           </Tip>

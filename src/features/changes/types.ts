@@ -43,3 +43,9 @@ export interface CommitResult {
   hash: string;
   summary: string;
 }
+
+export interface CommitAiConfig {
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+}

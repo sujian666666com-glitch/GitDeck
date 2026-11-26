@@ -2,6 +2,7 @@ import { Dialog } from "radix-ui";
 import { Settings as Gear, X } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
 import { Button, IconButton } from "@/components/ui/button";
+import { CommitAiSettings } from "./CommitAiSettings";
 import { actions, chord, defaults, label, type Action, type Preferences } from "./preferences";
 
 const modes = [["system", "跟随系统"], ["light", "白色"], ["dark", "黑色"]] as const;
@@ -47,7 +48,7 @@ export function Settings({ prefs, save }: { prefs: Preferences; save: (prefs: Pr
       </Dialog.Trigger>
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/25" />
-        <Dialog.Content aria-describedby={undefined} className="fixed top-1/2 left-1/2 z-50 w-96 -translate-1/2 rounded-card border border-line bg-surface p-5 text-ink shadow-pop">
+        <Dialog.Content aria-describedby={undefined} className="fixed top-1/2 left-1/2 z-50 max-h-[90vh] w-96 -translate-1/2 overflow-y-auto rounded-card border border-line bg-surface p-5 text-ink shadow-pop">
           <div className="mb-5 flex items-center justify-between">
             <Dialog.Title className="text-base font-semibold">设置</Dialog.Title>
             <Dialog.Close asChild><IconButton noTip label="关闭设置"><X /></IconButton></Dialog.Close>
@@ -85,6 +86,7 @@ export function Settings({ prefs, save }: { prefs: Preferences; save: (prefs: Pr
           ))}
           {editing && !error && <p className="mt-2 text-muted">现在按下新组合，例如 Ctrl + Shift + T，即可保存。</p>}
           {error && <p role="alert" className="mt-2 text-st-deleted">{error}</p>}
+          <CommitAiSettings />
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

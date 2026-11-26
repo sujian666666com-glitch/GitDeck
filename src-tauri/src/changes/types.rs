@@ -68,3 +68,11 @@ pub struct CommitResult {
     /// 提交标题行
     pub summary: String,
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitAiConfig {
+    pub base_url: String,
+    pub model: String,
+    pub api_key: String,
+}

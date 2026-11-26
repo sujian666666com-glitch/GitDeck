@@ -1,6 +1,6 @@
 import type { FileDiff } from "@/lib/diff";
 import { call } from "@/lib/tauri";
-import type { CommitResult, RepoStatus } from "./types";
+import type { CommitAiConfig, CommitResult, RepoStatus } from "./types";
 
 /** Changes 与远程同步后端命令（`src-tauri/src/changes/commands.rs`） */
 export const changesApi = {
@@ -12,6 +12,8 @@ export const changesApi = {
   discard: (repoPath: string, paths: string[]) => call<void>("changes_discard", { repoPath, paths }),
   commit: (repoPath: string, message: string, amend: boolean) =>
     call<CommitResult>("changes_commit", { repoPath, message, amend }),
+  generateMessage: (repoPath: string, config: CommitAiConfig) =>
+    call<string>("changes_generate_message", { repoPath, config }),
 
   fetch: (repoPath: string) => call<void>("remote_fetch", { repoPath }),
   pull: (repoPath: string) => call<void>("remote_pull", { repoPath }),

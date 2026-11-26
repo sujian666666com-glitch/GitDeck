@@ -1,6 +1,6 @@
+use crate::error::{AppError, AppResult};
+use crate::git::{git, runner::Git, FileDiff};
 use std::path::Path;
-use crate::error::AppResult;
-use crate::git::{git, FileDiff};
 
 #[cfg(windows)]
 const NULL_DEVICE: &str = "NUL";
@@ -9,69 +9,46 @@ const NULL_DEVICE: &str = "/dev/null";
 
 pub fn get_file_diff(repo_path: &str, path: &str, staged: bool) -> AppResult<FileDiff> {
     let repo = Path::new(repo_path);
-    if staged {
-        let has_head = git(repo)
-            .args(["rev-parse", "--verify", "HEAD"])
-            .output()
-            .map(|o| o.success())
-            .unwrap_or(false);
+    let untracked = !staged
+        && !git(repo)
+            .args([
+                "--literal-pathspecs",
+                "ls-files",
+                "--error-unmatch",
+                "--",
+                path,
+            ])
+            .output()?
+            .success();
+    let cmd = git(repo).args(["--literal-pathspecs", "diff"]);
+    let raw = read_patch(cmd, path, None, staged, untracked)?;
+    let old_path = raw.split(|&b| b == b'\n').find_map(|line| {
+        let name = line.strip_prefix(b"rename from ")?;
+        String::from_utf8(name.strip_suffix(b"\r").unwrap_or(name).to_vec()).ok()
+    });
+    Ok(FileDiff::from_patch(path, old_path, &raw))
+}
 
-        let raw = if has_head {
-            git(repo)
-                .args(["diff", "--cached", "--no-color", "--no-ext-diff", "--", path])
-                .run_bytes()?
-        } else {
-            // 空仓库初始提交前对比空树
-            git(repo)
-                .args([
-                    "diff",
-                    "--cached",
-                    "--no-color",
-                    "--no-ext-diff",
-                    "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
-                    "--",
-                    path,
-                ])
-                .run_bytes()?
-        };
-
-        let old_path = raw.split(|&b| b == b'\n').find_map(|line| {
-            if line.starts_with(b"rename from ") {
-                let mut s = &line[12..];
-                if s.ends_with(b"\r") {
-                    s = &s[..s.len() - 1];
-                }
-                String::from_utf8(s.to_vec()).ok()
-            } else {
-                None
-            }
-        });
-
-        Ok(FileDiff::from_patch(path, old_path, &raw))
-    } else {
-        let is_tracked = git(repo)
-            .args(["ls-files", "--error-unmatch", "--", path])
-            .output()
-            .map(|o| o.success())
-            .unwrap_or(false);
-
-        if !is_tracked {
-            let out = git(repo)
-                .args(["diff", "--no-index", "--no-color", "--no-ext-diff", "--", NULL_DEVICE, path])
-                .output()?;
-            if out.code == Some(0) || out.code == Some(1) {
-                Ok(FileDiff::from_patch(path, None, &out.stdout))
-            } else {
-                Err(crate::error::AppError::Git {
-                    message: format!("获取文件差异失败：{}", path),
-                    detail: out.stderr,
-                })
-            }
-        } else {
-            let raw = git(repo)
-                .args(["diff", "--no-color", "--no-ext-diff", "--", path])
-                .run_bytes()?;
-            Ok(FileDiff::from_patch(path, None, &raw))
+pub(super) fn read_patch(
+    cmd: Git,
+    path: &str,
+    old_path: Option<&str>,
+    staged: bool,
+    untracked: bool,
+) -> AppResult<Vec<u8>> {
+    let cmd = cmd.args(["--no-color", "--no-ext-diff"]);
+    if untracked {
+        let out = cmd.args(["--no-index", "--", NULL_DEVICE, path]).output()?;
+        if matches!(out.code, Some(0 | 1)) {
+            return Ok(out.stdout);
         }
+        return Err(AppError::Git {
+            message: format!("获取文件差异失败：{path}"),
+            detail: out.stderr,
+        });
     }
+
+    // 不指定基准时，--cached 在首次提交前会自动与空树比较。
+    let cmd = if staged { cmd.arg("--cached") } else { cmd };
+    cmd.arg("--").args(old_path).arg(path).run_bytes()
 }

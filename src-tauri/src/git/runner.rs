@@ -63,6 +63,7 @@ pub struct Git {
     args: Vec<OsString>,
     envs: Vec<(OsString, OsString)>,
     stdin: Option<Vec<u8>>,
+    stdout_limit: u64,
     timeout: Duration,
 }
 
@@ -73,6 +74,7 @@ pub fn git(cwd: impl AsRef<Path>) -> Git {
         args: Vec::new(),
         envs: Vec::new(),
         stdin: None,
+        stdout_limit: u64::MAX,
         timeout: DEFAULT_TIMEOUT,
     }
 }
@@ -105,6 +107,12 @@ impl Git {
 
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// 只保留 stdout 的前缀，其余输出继续排空，避免 git 因管道写满而阻塞。
+    pub fn stdout_limit(mut self, bytes: usize) -> Self {
+        self.stdout_limit = bytes as u64;
         self
     }
 
@@ -173,7 +181,10 @@ impl Git {
         let stdout_reader = child.stdout.take().map(|mut pipe| {
             thread::spawn(move || {
                 let mut buf = Vec::new();
-                let _ = pipe.read_to_end(&mut buf);
+                let _ = pipe.by_ref().take(self.stdout_limit).read_to_end(&mut buf);
+                if buf.len() as u64 == self.stdout_limit {
+                    let _ = std::io::copy(&mut pipe, &mut std::io::sink());
+                }
                 buf
             })
         });
