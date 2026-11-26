@@ -1,13 +1,14 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ArrowLeft, CircleAlert, Copy, FileText, GitCommitHorizontal, X } from "lucide-react";
 import { Dialog } from "radix-ui";
-import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { DiffViewer } from "@/components/diff/DiffViewer";
 import { Button, IconButton } from "@/components/ui/button";
 import { EmptyState, Spinner } from "@/components/ui/feedback";
 import { cn } from "@/lib/cn";
 import { formatDateTime, formatRelativeTime } from "@/lib/format";
-import { toAppError } from "@/lib/tauri";
+import { CommitMessage } from "./CommitMessage";
+import { useGraphRequest } from "./useGraphRequest";
 import { graphApi } from "./api";
 import { copyText } from "./branchActions";
 import type { CommitDetail, CommitFile, FileChangeKind } from "./types";
@@ -26,13 +27,14 @@ const fileStatus: Record<FileChangeKind, { letter: string; name: string; tone: s
 interface DrawerProps {
   repoPath: string;
   hash: string;
+  loadDetail: (hash: string) => Promise<CommitDetail>;
   close: () => void;
   select: (hash: string) => void;
 }
 
-export function CommitDrawer({ repoPath, hash, close, select }: DrawerProps) {
+export function CommitDrawer({ repoPath, hash, loadDetail, close, select }: DrawerProps) {
   const [file, setFile] = useState<CommitFile | null>(null);
-  const request = useLoad(() => graphApi.commitDetail(repoPath, hash));
+  const request = useGraphRequest(() => loadDetail(hash));
 
   return (
     <Dialog.Root open modal={false} onOpenChange={(open) => { if (!open) close(); }}>
@@ -111,8 +113,7 @@ function CommitContents({ detail, select, openFile }: { detail: CommitDetail; se
             <span>{formatDateTime(detail.commitTime)}</span>
           </div>
         )}
-        <h3 className="mt-3 text-[14px] leading-snug font-semibold whitespace-pre-wrap break-words select-text">{detail.subject || "（无标题）"}</h3>
-        {detail.body && <p className="mt-2 text-[13px] leading-relaxed whitespace-pre-wrap break-words text-ink-2 select-text">{detail.body}</p>}
+        <div className="mt-3"><CommitMessage subject={detail.subject} body={detail.body} /></div>
         {detail.parents.length > 0 && (
           <div className="mt-3 flex flex-wrap items-center gap-1.5 text-[12px] text-muted">
             <span>父提交</span>
@@ -165,7 +166,7 @@ function FileRow({ file, top, height, open }: { file: CommitFile; top: number; h
 }
 
 function CommitDiff({ repoPath, hash, file }: { repoPath: string; hash: string; file: CommitFile }) {
-  const request = useLoad(() => graphApi.commitFileDiff(repoPath, hash, file.path, file.oldPath));
+  const request = useGraphRequest(() => graphApi.commitFileDiff(repoPath, hash, file.path, file.oldPath));
   if (request.data) return <DiffViewer className="min-h-0 flex-1" diff={request.data} />;
   return <DetailFeedback message={request.error} retry={request.retry} />;
 }
@@ -176,22 +177,4 @@ function DetailFeedback({ message, retry }: { message: string | null; retry: () 
   ) : (
     <div className="grid flex-1 place-items-center"><Spinner /></div>
   );
-}
-
-// Consumers remount when their commit or file changes.
-function useLoad<T>(request: () => Promise<T>) {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
-  const start = useEffectEvent(request);
-
-  useEffect(() => {
-    let current = true;
-    start().then((value) => { if (current) setData(value); }).catch((reason) => {
-      if (current) setError(toAppError(reason).message);
-    });
-    return () => { current = false; };
-  }, [attempt]);
-
-  return { data, error, retry: () => { setError(null); setAttempt((value) => value + 1); } };
 }

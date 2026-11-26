@@ -186,7 +186,12 @@ export const graphMock: MockHandlers = {
     const commit = repo.byHash.get(hash) ?? mockError("notFound", "找不到提交");
     return {
       ...labelled(repo, commit),
-      body: commit.subject === "feat: add login" ? "补充单点登录流程，登录成功后写入会话。" : "",
+      body: commit.subject === "feat: add login" ? [
+        "change-id: add-sso-login",
+        "",
+        "- 通过 `sso.authorize(user)` 发起单点登录",
+        "- 登录成功后将令牌传给 `session.create`，建立用户会话",
+      ].join("\n") : "",
       committerName: commit.authorName,
       committerEmail: commit.authorEmail,
       commitTime: commit.authorTime,

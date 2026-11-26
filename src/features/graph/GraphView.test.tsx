@@ -30,6 +30,29 @@ describe("Git Graph interactions", () => {
     vi.restoreAllMocks();
   });
 
+  it("悬停读取提交并渲染正文，单击在抽屉复用该详情", async () => {
+    const invoke = renderGraph("/hover-preview");
+    const first = await screen.findByRole("button", { name: "feat: add login" });
+    vi.spyOn(first, "getBoundingClientRect").mockReturnValue(new DOMRect(20, 60, 520, 32));
+    const other = screen.getByRole("button", { name: "fix: authentication" });
+    fireEvent.pointerEnter(other, { pointerType: "mouse" });
+    fireEvent.pointerLeave(other, { pointerType: "mouse" });
+    expect(invoke.mock.calls.some(([command]) => command === "graph_commit_detail")).toBe(false);
+    fireEvent.pointerEnter(first, { pointerType: "mouse" });
+    const preview = within(await screen.findByRole("complementary", { name: "提交预览" }));
+    await preview.findByText("add-sso-login");
+    expect(preview.getAllByRole("listitem")).toHaveLength(2);
+    expect(preview.getByText("sso.authorize(user)").tagName).toBe("CODE");
+    expect(preview.getByText("+7")).toBeTruthy();
+
+    fireEvent.click(first);
+    const drawer = within(await screen.findByRole("dialog", { name: "提交详情" }));
+    await drawer.findByText("add-sso-login");
+    expect(drawer.getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.queryByRole("complementary", { name: "提交预览" })).toBeNull();
+    expect(invoke.mock.calls.filter(([command]) => command === "graph_commit_detail")).toHaveLength(1);
+  });
+
   it("closes the top overlay first, then returns from Diff, then closes the drawer", async () => {
     renderGraph("/escape-test");
     fireEvent.click(await screen.findByRole("button", { name: "feat: add login" }));

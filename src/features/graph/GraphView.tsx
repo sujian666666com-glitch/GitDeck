@@ -7,16 +7,16 @@ import {
   ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuSeparator, ContextMenuTrigger,
   Menu, MenuContent, MenuLabel, MenuRadioGroup, MenuRadioItem, MenuSeparator, MenuTrigger,
 } from "@/components/ui/menu";
-import { Tip } from "@/components/ui/tooltip";
+import { HoverCard } from "radix-ui";
 import { cn } from "@/lib/cn";
-import { formatRelativeTime } from "@/lib/format";
 import { graphApi } from "./api";
 import { copyText, useBranchActions, type BranchActions } from "./branchActions";
 import { CreateBranchDialog, MergeBranchDialog } from "./BranchDialogs";
 import { CommitDrawer } from "./CommitDrawer";
+import { CommitPreview } from "./CommitPreview";
 import { computeGraphLayout, ROW_HEIGHT, VISIBLE_LANES, type GraphRow } from "./layout";
 import { RefBadges } from "./RefBadges";
-import type { BranchFilter, CommitSummary, RepoRefs } from "./types";
+import type { BranchFilter, CommitDetail, CommitSummary, RepoRefs } from "./types";
 import { useCommitHistory } from "./useCommitHistory";
 
 export interface GraphViewProps {
@@ -38,6 +38,8 @@ export function GraphView({ repoPath, active }: GraphViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const lastDetail = useRef<{ repoPath: string; hash: string; request: Promise<CommitDetail> } | null>(null);
   const history = useCommitHistory(repoPath, active, scrollRef);
   const actions = useBranchActions(repoPath);
   const { dialog } = actions;
@@ -60,8 +62,18 @@ export function GraphView({ repoPath, active }: GraphViewProps) {
     if (lastIndex >= 0 && lastIndex >= commits.length - 30) loadNext();
   }, [active, commits.length, history.failure, history.loading, history.page?.hasMore, lastIndex]);
 
+  function loadDetail(hash: string) {
+    if (lastDetail.current?.repoPath === repoPath && lastDetail.current.hash === hash) return lastDetail.current.request;
+    const request = graphApi.commitDetail(repoPath, hash);
+    lastDetail.current = { repoPath, hash, request };
+    void request.catch(() => {
+      if (lastDetail.current?.request === request) lastDetail.current = null;
+    });
+    return request;
+  }
+
   function copyMessage(hash: string) {
-    const message = graphApi.commitDetail(repoPath, hash)
+    const message = loadDetail(hash)
       .then(({ subject, body }) => [subject, body].filter(Boolean).join("\n\n"));
     void copyText(message, "提交信息");
   }
@@ -83,7 +95,7 @@ export function GraphView({ repoPath, active }: GraphViewProps) {
         </div>
       </div>
 
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden [overflow-anchor:none]">
+      <div ref={scrollRef} onScroll={() => setPreview(null)} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden [overflow-anchor:none]">
         {commits.length > 0 ? (
           <>
             <div role="list" aria-label="提交历史" className="relative" style={{ height: virtualList.getTotalSize() }}>
@@ -97,10 +109,14 @@ export function GraphView({ repoPath, active }: GraphViewProps) {
                     laneWidth={laneWidth}
                     top={start}
                     selected={selected === commit.hash}
+                    previewOpen={active && selected !== commit.hash && !dialog && preview === commit.hash}
+                    onPreviewChange={open => setPreview(current => open ? commit.hash : current === commit.hash ? null : current)}
+                    loadDetail={loadDetail}
                     refs={history.refs}
                     actions={actions}
                     select={(trigger) => {
                       triggerRef.current = trigger;
+                      setPreview(null);
                       setSelected(commit.hash);
                     }}
                     copyMessage={() => copyMessage(commit.hash)}
@@ -131,6 +147,7 @@ export function GraphView({ repoPath, active }: GraphViewProps) {
           key={selected}
           repoPath={repoPath}
           hash={selected}
+          loadDetail={loadDetail}
           close={closeDrawer}
           select={setSelected}
         />
@@ -201,15 +218,18 @@ interface CommitRowProps {
   laneWidth: number;
   top: number;
   selected: boolean;
+  previewOpen: boolean;
+  onPreviewChange: (open: boolean) => void;
+  loadDetail: (hash: string) => Promise<CommitDetail>;
   refs: RepoRefs | null;
   actions: BranchActions;
   select: (trigger: HTMLButtonElement) => void;
   copyMessage: () => void;
 }
 
-function CommitRow({ commit, row, laneWidth, top, selected, refs, actions, select, copyMessage }: CommitRowProps) {
+function CommitRow({ commit, row, laneWidth, top, selected, previewOpen, onPreviewChange, loadDetail, refs, actions, select, copyMessage }: CommitRowProps) {
   return (
-    <ContextMenu>
+    <ContextMenu onOpenChange={open => { if (open) onPreviewChange(false); }}>
       <ContextMenuTrigger asChild>
         <div
           role="listitem"
@@ -219,17 +239,20 @@ function CommitRow({ commit, row, laneWidth, top, selected, refs, actions, selec
           )}
           style={{ height: ROW_HEIGHT, transform: `translateY(${top}px)` }}
         >
-          <Tip content={`${commit.authorName} · ${formatRelativeTime(commit.authorTime)} · ${commit.shortHash}`}>
-            <button
-              type="button"
-              aria-current={selected || undefined}
-              className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus"
-              onClick={(event) => select(event.currentTarget)}
-            >
-              <LaneGraphic row={row} width={laneWidth} />
-              <span className="truncate pr-2 text-[13px] text-ink">{commit.subject || "（无标题）"}</span>
-            </button>
-          </Tip>
+          <HoverCard.Root open={previewOpen} onOpenChange={onPreviewChange} openDelay={450} closeDelay={120}>
+            <HoverCard.Trigger asChild>
+              <button
+                type="button"
+                aria-current={selected || undefined}
+                className="flex h-full min-w-0 flex-1 items-center gap-2 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus"
+                onClick={(event) => select(event.currentTarget)}
+              >
+                <LaneGraphic row={row} width={laneWidth} />
+                <span className="truncate pr-2 text-[13px] text-ink">{commit.subject || "（无标题）"}</span>
+              </button>
+            </HoverCard.Trigger>
+            <HoverCard.Portal><CommitPreview commit={commit} loadDetail={loadDetail} /></HoverCard.Portal>
+          </HoverCard.Root>
           <RefBadges labels={commit.refs} color={row.color} refs={refs} actions={actions} />
         </div>
       </ContextMenuTrigger>
